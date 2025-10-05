@@ -149,18 +149,37 @@ async def create_research_report(args: dict[str, Any]) -> dict[str, Any]:
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     extension = "md" if format_type == "markdown" else "txt"
 
-    # Include report type in filename for clarity with prefixes for better organization
-    # Format: PREFIX_reporttype_topic_timestamp.ext
-    prefixes = {
-        "draft": "DRAFT",
-        "final": "FINAL",
-        "editorial_review": "EDITORIAL",
-        "editorial_feedback": "EDITORIAL_FEEDBACK",
-        "research_findings": "RESEARCH",
-        "search_verification": "SEARCH_VERIFY"
+    # Include report type in filename for clarity with numbered work product prefixes
+    # Format: PREFIX-topic_timestamp.ext (where PREFIX is work product number + optional letter suffix)
+    base_prefix_map = {
+        "draft": "2",                   # Work Product 2: Initial Report
+        "report": "2",                  # Work Product 2: Initial Report
+        "revised": "2",                 # Work Product 2: Revised Report (will get suffix)
+        "revision": "2",                # Work Product 2: Revised Report (will get suffix)
+        "editorial_review": "3",        # Work Product 3: Editorial Review
+        "editorial": "3",               # Work Product 3: Editorial Review
+        "editorial_feedback": "3",      # Work Product 3: Editorial Review
+        "final": "4",                   # Work Product 4: Final Summary
+        "final_summary": "4",           # Work Product 4: Final Summary
+        "research_findings": "1",       # Work Product 1: Research
+        "search_verification": "1",     # Work Product 1: Research
+        "research": "1"                 # Work Product 1: Research
     }
-    prefix = prefixes.get(report_type.lower(), report_type.upper())
-    filename = f"{prefix}_{report_type}_{sanitized_topic}_{timestamp}.{extension}"
+    base_prefix = base_prefix_map.get(report_type.lower(), "2")  # Default to 2- if unknown
+
+    # Count existing files with this prefix to determine suffix (A, B, C, etc.)
+    session_dir = Path.cwd() / f"KEVIN/sessions/{session_id}/{subdir}"
+    session_dir.mkdir(parents=True, exist_ok=True)
+    existing_files = list(session_dir.glob(f"{base_prefix}*-*.{extension}"))
+    if not existing_files:
+        # First file of this type - no suffix
+        prefix = base_prefix
+    else:
+        # Calculate suffix based on count (A, B, C, D, etc.)
+        suffix_letter = chr(65 + len(existing_files))  # 65 is ASCII for 'A'
+        prefix = f"{base_prefix}{suffix_letter}"
+
+    filename = f"{prefix}-{sanitized_topic}_{timestamp}.{extension}"
     # Use absolute path to ensure agents save files to correct location
     from pathlib import Path
     recommended_filepath = str(Path.cwd() / f"KEVIN/sessions/{session_id}/{subdir}/{filename}")

@@ -270,9 +270,20 @@ def save_work_product(
             research_dir = os.path.join(session_dir, "research")
             Path(research_dir).mkdir(parents=True, exist_ok=True)
 
-            # Generate timestamp and filename with numbered prefix
+            # Generate timestamp and filename with numbered prefix + suffix
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"1-search_workproduct_{timestamp}.md"
+
+            # Count existing research files to determine suffix (1, 1A, 1B, 1C, etc.)
+            existing_files = list(Path(research_dir).glob("1*-search_workproduct_*.md"))
+            if not existing_files:
+                # First research file - no suffix
+                prefix = "1"
+            else:
+                # Calculate suffix based on count (A, B, C, D, etc.)
+                suffix_letter = chr(65 + len(existing_files))  # 65 is ASCII for 'A'
+                prefix = f"1{suffix_letter}"
+
+            filename = f"{prefix}-search_workproduct_{timestamp}.md"
             filepath = os.path.join(research_dir, filename)
         else:
             # Custom workproduct directory (legacy support)

@@ -40,6 +40,7 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "logfire>=0.1.0",
     "claude-agent-sdk>=0.1.0",
+    "jq>=1.10.0",
 ]
 
 [project.optional-dependencies]

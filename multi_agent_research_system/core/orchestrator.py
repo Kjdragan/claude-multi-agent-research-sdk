@@ -783,11 +783,70 @@ class ResearchOrchestrator:
 
         return summaries
 
+    async def _ensure_playwright_browsers(self):
+        """Check if Playwright browsers are installed and install if needed."""
+        import subprocess
+        from pathlib import Path
+
+        # Check if Chromium browser exists
+        playwright_cache = Path.home() / ".cache" / "ms-playwright"
+        chromium_dirs = list(playwright_cache.glob("chromium-*"))
+
+        browser_exists = False
+        if chromium_dirs:
+            # Check if any chromium directory has the chrome executable
+            for chromium_dir in chromium_dirs:
+                chrome_path = chromium_dir / "chrome-linux" / "chrome"
+                if chrome_path.exists():
+                    browser_exists = True
+                    self.logger.info(f"✅ Playwright browser found: {chrome_path}")
+                    break
+
+        if not browser_exists:
+            self.logger.warning("⚠️  Playwright browsers not found - installing now...")
+            print("⚠️  Playwright browsers not found - installing now...")
+            print("   This is a one-time setup that may take 1-2 minutes...")
+
+            try:
+                # Run playwright install using uv
+                result = subprocess.run(
+                    ["uv", "run", "playwright", "install"],
+                    capture_output=True,
+                    text=True,
+                    check=True
+                )
+                self.logger.info("✅ Playwright browsers installed successfully")
+                print("✅ Playwright browsers installed successfully")
+            except subprocess.CalledProcessError as e:
+                error_msg = f"Failed to install Playwright browsers: {e.stderr}"
+                self.logger.error(error_msg)
+                print(f"❌ {error_msg}")
+                raise RuntimeError(error_msg)
+            except FileNotFoundError:
+                # If uv is not found, try direct playwright install
+                try:
+                    result = subprocess.run(
+                        ["playwright", "install"],
+                        capture_output=True,
+                        text=True,
+                        check=True
+                    )
+                    self.logger.info("✅ Playwright browsers installed successfully")
+                    print("✅ Playwright browsers installed successfully")
+                except Exception as e:
+                    error_msg = f"Failed to install Playwright browsers: {str(e)}"
+                    self.logger.error(error_msg)
+                    print(f"❌ {error_msg}")
+                    raise RuntimeError(error_msg)
+
     async def initialize(self):
         """Initialize the orchestrator and all agent clients."""
         self.logger.info("Starting orchestrator initialization")
 
         try:
+            # Check and install Playwright browsers if needed
+            await self._ensure_playwright_browsers()
+
             # Hook system disabled
             self.logger.info("Hook system disabled - skipping initialization")
 
@@ -1289,10 +1348,15 @@ class ResearchOrchestrator:
             scope = scope_data.get("scope", "default").lower()
             special_requirements = scope_data.get("special_requirements", "")
 
+            # Import settings to get word count defaults
+            from multi_agent_research_system.config.settings import get_enhanced_search_config
+            config = get_enhanced_search_config()
+
             # Default configuration
             report_config = {
                 "scope": "default",
                 "size_multiplier": 1.0,
+                "min_words": config.default_report_min_words,
                 "style_instructions": "Provide a balanced, comprehensive report covering all key aspects.",
                 "editing_rigor": "standard",
                 "special_requirements": special_requirements,
@@ -1305,6 +1369,7 @@ class ResearchOrchestrator:
                 report_config.update({
                     "scope": "brief",
                     "size_multiplier": 0.6,
+                    "min_words": config.brief_report_min_words,
                     "style_instructions": "Provide a concise, focused report highlighting the most important findings.",
                     "editing_rigor": "light"
                 })
@@ -1312,6 +1377,7 @@ class ResearchOrchestrator:
                 report_config.update({
                     "scope": "comprehensive",
                     "size_multiplier": 1.5,
+                    "min_words": config.comprehensive_report_min_words,
                     "style_instructions": "Provide a thorough, detailed analysis with comprehensive coverage.",
                     "editing_rigor": "thorough"
                 })
@@ -1325,9 +1391,12 @@ class ResearchOrchestrator:
         except Exception as e:
             self.logger.warning(f"LLM scope determination failed, using default: {e}")
             # Fallback to default configuration
+            from multi_agent_research_system.config.settings import get_enhanced_search_config
+            config = get_enhanced_search_config()
             return {
                 "scope": "default",
                 "size_multiplier": 1.0,
+                "min_words": config.default_report_min_words,
                 "style_instructions": "Provide a balanced, comprehensive report covering all key aspects.",
                 "editing_rigor": "standard",
                 "special_requirements": "",
@@ -1856,14 +1925,14 @@ class ResearchOrchestrator:
         return str(uuid.uuid4())
 
     def _cleanup_sessions_directory(self):
-        """Clean up logs, work products, and sessions directory for clean slate."""
+        """Clean up logs, sessions, url_tracking, and work products for clean slate."""
         import shutil
 
-        # Define directories to clean
+        # Define directories to clean - use absolute paths from KEVIN
         cleanup_dirs = [
-            "KEVIN/sessions",
-            "logs",
-            "work_products"  # Clean up any legacy work products
+            "KEVIN/sessions",      # Session data and work products
+            "KEVIN/logs",          # All log files
+            "KEVIN/url_tracking",  # URL deduplication tracking
         ]
 
         for dir_path in cleanup_dirs:
@@ -2908,16 +2977,21 @@ class ResearchOrchestrator:
                 2. Include all key findings from the research
                 3. Organize content logically with clear sections
                 4. Adjust the depth and length to match the {report_config['scope']} scope
-                4. Ensure proper citations and source attribution
-                5. Target the report to the user's specified audience
-                6. Use mcp__research_tools__create_research_report to create the report
-                7. CRITICAL: Save the report using the provided filepath from the tool
+                5. **TARGET LENGTH**: Aim for {report_config['min_words']}+ words, adjusting based on available research data
+                   - If abundant research is available, expand to provide comprehensive coverage
+                   - If research is limited, focus on quality over hitting exact word count
+                   - Conclude with clear takeaways and implications
+                6. Ensure proper citations and source attribution when available
+                7. Target the report to the user's specified audience
+                8. Use mcp__research_tools__create_research_report to create the report
+                9. CRITICAL: Save the report using the provided filepath from the tool
 
                 REQUIREMENTS:
                 - Execute the create_research_report tool to generate the report
                 - Use the Write tool to save the report to the exact filepath provided
                 - Do not just describe the report - actually create and save it
                 - Ensure the report is comprehensive and well-structured
+                - Adapt report length to research availability (target: {report_config['min_words']}+ words)
 
                 Session ID: {session_id}
                 """
@@ -3036,13 +3110,23 @@ class ResearchOrchestrator:
                 - Successful scrapes: {budget_status["editorial"]["successful_scrapes"]}
                 - Search limit reached: {budget_status["editorial"]["search_queries_reached_limit"]}
 
-                Use the Read tool to examine the generated report files, then provide comprehensive review:
+                Use the Read tool to examine the generated report files AND all available research data, then provide comprehensive review:
 
+                CRITICAL EDITORIAL PRIORITIES - PROVIDE SPECIFIC, ACTIONABLE FEEDBACK:
                 1. Assess report quality against professional standards
                 2. Check accuracy and proper source attribution
                 3. Evaluate clarity, organization, and completeness
-                4. Identify specific gaps or areas needing improvement
-                5. Provide specific, actionable feedback
+                4. **IDENTIFY SPECIFIC DATA GAPS**: Point out where the report lacks specific facts, statistics, quotes, or data points
+                5. **RECOMMEND SPECIFIC ENHANCEMENTS**: Tell the report agent exactly which data from the research should be integrated
+                6. **CITE MISSING SPECIFICS**: When you find generic statements, recommend the specific data/quotes that should replace them
+                7. Provide specific, actionable feedback WITH EXAMPLES of data to add
+
+                EDITORIAL FEEDBACK REQUIREMENTS - ADD SUBSTANCE:
+                - When you identify missing data, CITE THE SPECIFIC FACTS/STATISTICS/QUOTES from research that should be added
+                - Point to exact data points in the research materials that would enhance the report
+                - Recommend specific quotes, figures, or examples to integrate
+                - Identify where general statements should be replaced with concrete data
+                - Your feedback should give the report agent clear direction on what specific content to add
 
                 SEARCH GUIDELINES:
                 - Only search for SPECIFIC identified gaps, not general "more information"
@@ -3052,7 +3136,8 @@ class ResearchOrchestrator:
 
                 If you identify research gaps and budget allows, conduct targeted searches following the guidelines above.
 
-                Provide detailed feedback that will help improve the report to meet professional standards.
+                DELIVERABLE: Provide detailed feedback that includes SPECIFIC DATA RECOMMENDATIONS from the research materials.
+                Your feedback should tell the report agent exactly what facts, quotes, and statistics to integrate to enhance the report.
                 """
 
                 # Execute editorial review with extended timeout for search activities
@@ -3342,14 +3427,27 @@ This session had limited research output available. The editorial agent has proc
 
         Use the Read tool to examine the current report and editorial feedback, then:
 
-        1. Address all feedback from the editorial review
-        2. Improve report quality based on specific recommendations
-        3. Ensure all identified issues are resolved
-        4. Maintain overall report coherence and quality
-        5. Use the Write tool to save the improved report
-        6. CRITICAL: Add "3-" prefix to your revised report title to indicate this is Stage 3 output
+        CRITICAL REVISION PRIORITIES - TAKE EDITORIAL FEEDBACK SERIOUSLY:
+        1. **INTEGRATE SPECIFIC DATA**: Add the exact facts, statistics, quotes, and data points the editor recommended
+        2. **REPLACE GENERIC STATEMENTS**: Where the editor identified generic content, substitute with specific data from research
+        3. **ADD RECOMMENDED CONTENT**: Incorporate all specific examples, figures, and evidence the editor cited
+        4. **ENHANCE WITH FACTS**: Use the editor's guidance to add substance through concrete data and quotes
+        5. Address all other feedback from the editorial review (structure, clarity, citations)
+        6. Improve report quality based on all specific recommendations
+        7. Ensure all identified issues are resolved
+        8. Maintain overall report coherence and quality while adding substance
+        9. Use create_research_report with report_type="revised" to format the revised report
+        10. CRITICAL: The tool will automatically add "2B-" prefix to your revised report filename to indicate this is Work Product 2B (Revised Report)
 
-        Focus on implementing the feedback systematically and improving the report to meet professional standards.
+        EDITORIAL FEEDBACK IMPLEMENTATION REQUIREMENTS:
+        - When the editor recommends adding specific data, FIND IT in the research materials and INTEGRATE IT
+        - When the editor cites missing statistics/quotes, LOCATE THEM and ADD THEM to the report
+        - When the editor points to gaps, FILL THEM with the specific content recommended
+        - PRIORITIZE data integration and specificity enhancements from editorial feedback
+        - The editor's comments represent critical quality improvements - implement them thoroughly
+
+        Focus on implementing the feedback systematically, especially the specific data and content recommendations,
+        to significantly improve the report's substance and meet professional standards.
         """
 
         # Execute revisions using the new single client pattern with natural language agent selection
@@ -3401,7 +3499,8 @@ This session had limited research output available. The editorial agent has proc
             3. Location of all work products created
             4. Final quality assessment
 
-            CRITICAL: Add "4-" prefix to your final summary title to indicate this is Stage 4 output
+            Use create_research_report with report_type="final_summary" or use Write tool with "4-" prefix.
+            CRITICAL: The filename should have "4-" prefix to indicate this is Work Product 4 (Final Summary)
             Save this as a final summary document in the session directory.
             """
 

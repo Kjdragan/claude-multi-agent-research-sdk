@@ -647,10 +647,37 @@ async def create_research_report(args: dict[str, Any]) -> dict[str, Any]:
         working_dir = session_path / "working"
         working_dir.mkdir(parents=True, exist_ok=True)
 
-        # Generate timestamp and filename
+        # Generate timestamp and filename with work product number prefix
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         safe_title = "".join(c for c in title if c.isalnum() or c in (' ', '-', '_')).rstrip()[:50]
-        filename = f"DRAFT_{safe_title}_{timestamp}.md"
+
+        # Map report_type to numbered work product base prefix
+        base_prefix_map = {
+            "draft": "2",           # Work Product 2: Initial Report
+            "report": "2",          # Work Product 2: Initial Report
+            "revised": "2",         # Work Product 2: Revised Report (will get suffix)
+            "revision": "2",        # Work Product 2: Revised Report (will get suffix)
+            "editorial_review": "3", # Work Product 3: Editorial Review
+            "editorial": "3",       # Work Product 3: Editorial Review
+            "final": "4",           # Work Product 4: Final Summary
+            "final_summary": "4",   # Work Product 4: Final Summary
+            "research": "1",        # Work Product 1: Research
+            "research_findings": "1" # Work Product 1: Research
+        }
+
+        base_prefix = base_prefix_map.get(report_type.lower(), "2")  # Default to 2- if unknown
+
+        # Count existing files with this prefix to determine suffix (A, B, C, etc.)
+        existing_files = list(working_dir.glob(f"{base_prefix}*-*.md"))
+        if not existing_files:
+            # First file of this type - no suffix
+            prefix = base_prefix
+        else:
+            # Calculate suffix based on count (A, B, C, D, etc.)
+            suffix_letter = chr(65 + len(existing_files))  # 65 is ASCII for 'A'
+            prefix = f"{base_prefix}{suffix_letter}"
+
+        filename = f"{prefix}-{safe_title}_{timestamp}.md"
         filepath = working_dir / filename
 
         # Format the report content with proper structure

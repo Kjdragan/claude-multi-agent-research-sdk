@@ -405,9 +405,20 @@ def save_search_work_product(
         research_dir = sessions_dir / "research"
         research_dir.mkdir(parents=True, exist_ok=True)
 
-        # Generate timestamp and filename with numbered prefix
+        # Generate timestamp and filename with numbered prefix + suffix
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"1-search_workproduct_{timestamp}.md"
+
+        # Count existing research files to determine suffix (1, 1A, 1B, 1C, etc.)
+        existing_files = list(research_dir.glob("1*-search_workproduct_*.md"))
+        if not existing_files:
+            # First research file - no suffix
+            prefix = "1"
+        else:
+            # Calculate suffix based on count (A, B, C, D, etc.)
+            suffix_letter = chr(65 + len(existing_files))  # 65 is ASCII for 'A'
+            prefix = f"1{suffix_letter}"
+
+        filename = f"{prefix}-search_workproduct_{timestamp}.md"
         filepath = research_dir / filename
 
         # Build work product content
@@ -1250,9 +1261,20 @@ def save_expanded_search_work_product(
         research_dir = sessions_dir / "research"
         research_dir.mkdir(parents=True, exist_ok=True)
 
-        # Generate timestamp and filename with numbered prefix
+        # Generate timestamp and filename with numbered prefix + suffix
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"1-expanded_search_workproduct_{timestamp}.md"
+
+        # Count existing expanded search files to determine suffix (1, 1A, 1B, 1C, etc.)
+        existing_files = list(research_dir.glob("1*-expanded_search_workproduct_*.md"))
+        if not existing_files:
+            # First expanded search file - no suffix
+            prefix = "1"
+        else:
+            # Calculate suffix based on count (A, B, C, D, etc.)
+            suffix_letter = chr(65 + len(existing_files))  # 65 is ASCII for 'A'
+            prefix = f"1{suffix_letter}"
+
+        filename = f"{prefix}-expanded_search_workproduct_{timestamp}.md"
         filepath = research_dir / filename
 
         # Build work product content

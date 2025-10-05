@@ -43,6 +43,11 @@ class EnhancedSearchConfig:
     max_response_tokens: int = 20000
     content_summary_threshold: int = 20000
 
+    # Report generation settings
+    brief_report_min_words: int = 800      # Brief report minimum target
+    default_report_min_words: int = 2500   # Default report minimum target
+    comprehensive_report_min_words: int = 5000  # Comprehensive report minimum target
+
     # Work product directories
     default_workproduct_dir: str = "/home/kjdragan/lrepos/claude-agent-sdk-python/KEVIN/work_products"
     kevin_workproducts_dir: str | None = None

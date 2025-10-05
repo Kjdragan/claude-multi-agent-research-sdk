@@ -196,20 +196,14 @@ def create_zplayground1_mcp_server():
 
             # Parameter validation is now handled above with FAIL-FAST approach
 
-            # Set up work product directory using session-based structure
-            workproduct_dir = os.environ.get('KEVIN_WORKPRODUCTS_DIR')
-            if not workproduct_dir:
-                # Use session-based directory structure
-                base_session_dir = f"/home/kjdragan/lrepos/claude-agent-sdk-python/KEVIN/sessions/{session_id}"
-                research_dir = f"{base_session_dir}/research"
-                workproduct_dir = research_dir
-
-            # Ensure workproduct directory exists
-            Path(workproduct_dir).mkdir(parents=True, exist_ok=True)
+            # NOTE: Do NOT set workproduct_dir here - let search functions use session_id
+            # to automatically create proper session-based directory structure and filenames.
+            # The search functions check `if workproduct_dir is None` to use session structure.
 
             logger.info(f"🚀 zPlayground1 executing: query='{query}', search_mode='{search_mode}', anti_bot_level={anti_bot_level}")
 
             # Execute the exact zPlayground1 search and extract functionality
+            # Pass workproduct_dir=None to trigger session-based structure with "1-" prefix
             if search_mode == "news":
                 # Use news search and crawl
                 result = await news_search_and_crawl_direct(
@@ -218,7 +212,7 @@ def create_zplayground1_mcp_server():
                     auto_crawl_top=auto_crawl_top,
                     session_id=session_id,
                     anti_bot_level=anti_bot_level,
-                    workproduct_dir=workproduct_dir
+                    workproduct_dir=None  # Let function use session-based structure
                 )
             else:
                 # Use web search and crawl
@@ -231,7 +225,7 @@ def create_zplayground1_mcp_server():
                     max_concurrent=max_concurrent,
                     session_id=session_id,
                     anti_bot_level=anti_bot_level,
-                    workproduct_dir=workproduct_dir
+                    workproduct_dir=None  # Let function use session-based structure
                 )
 
             # Apply MCP compliance with multi-level content allocation
@@ -240,12 +234,14 @@ def create_zplayground1_mcp_server():
             mcp_manager = get_mcp_compliance_manager()
 
             # Prepare metadata for MCP compliance
+            # Calculate actual workproduct path for metadata
+            session_research_dir = f"/home/kjdragan/lrepos/claude-agent-sdk-python/KEVIN/sessions/{session_id}/research"
             base_metadata = {
                 "query": query,
                 "search_mode": search_mode,
                 "anti_bot_level": anti_bot_level,
                 "session_id": session_id,
-                "workproduct_dir": workproduct_dir,
+                "workproduct_dir": session_research_dir,
                 "implementation": "zPlayground1_exact",
                 "parallel_processing": True,
                 "ai_content_cleaning": True
