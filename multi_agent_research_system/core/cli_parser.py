@@ -97,6 +97,12 @@ class CLIInputParser:
         # Clean the topic by removing parameter strings
         clean_topic = self._clean_topic(raw_input, parameters)
 
+        # Apply intelligent topic analysis if no explicit parameters provided
+        if not parameters.get('sources_requested') and not parameters.get('scope'):
+            intelligent_params = self._analyze_topic_intelligently(clean_topic)
+            parameters.update(intelligent_params)
+            self.logger.info(f"Applied intelligent analysis: {intelligent_params}")
+
         # Create parsed request
         parsed_request = ParsedResearchRequest(
             clean_topic=clean_topic.strip(),
@@ -104,7 +110,7 @@ class CLIInputParser:
             parameters=parameters,
             scope=parameters.get('scope', 'default'),
             report_type=parameters.get('report_type', 'default'),
-            sources_requested=parameters.get('sources_requested', 10),
+            sources_requested=parameters.get('sources_requested', 15),
             crawl_speed=parameters.get('crawl_speed', 'normal'),
             special_requirements=parameters.get('special_requirements', '')
         )
@@ -161,6 +167,119 @@ class CLIInputParser:
         # Use the clean topic directly - this is what should be sent to search APIs
         return parsed_request.clean_topic
 
+    def _analyze_topic_intelligently(self, topic: str) -> Dict[str, Any]:
+        """
+        Analyze topic to determine intelligent default parameters.
+
+        This eliminates the need for users to specify sources=N or scope parameters
+        by automatically determining appropriate values based on topic analysis.
+
+        Args:
+            topic: Clean topic string
+
+        Returns:
+            Dictionary of intelligent parameters
+        """
+        topic_lower = topic.lower()
+
+        # Default values
+        intelligent_params = {
+            'sources_requested': 15,  # Default target
+            'scope': 'standard'
+        }
+
+        # Topic complexity analysis
+        topic_indicators = {
+            # Brief/scope indicators
+            'brief': {'scope': 'limited', 'sources': 8},
+            'summary': {'scope': 'limited', 'sources': 8},
+            'overview': {'scope': 'limited', 'sources': 8},
+            'quick': {'scope': 'brief', 'sources': 6},
+            'basic': {'scope': 'limited', 'sources': 8},
+
+            # Comprehensive indicators
+            'comprehensive': {'scope': 'comprehensive', 'sources': 20},
+            'detailed': {'scope': 'comprehensive', 'sources': 20},
+            'in-depth': {'scope': 'comprehensive', 'sources': 20},
+            'thorough': {'scope': 'comprehensive', 'sources': 20},
+            'extensive': {'scope': 'extensive', 'sources': 30},
+            'complete': {'scope': 'comprehensive', 'sources': 20},
+
+            # Academic indicators
+            'academic': {'scope': 'comprehensive', 'sources': 25},
+            'research': {'scope': 'comprehensive', 'sources': 20},
+            'scholarly': {'scope': 'comprehensive', 'sources': 25},
+            'paper': {'scope': 'comprehensive', 'sources': 20},
+            'thesis': {'scope': 'extensive', 'sources': 30},
+            'dissertation': {'scope': 'extensive', 'sources': 30},
+
+            # Business indicators
+            'business': {'scope': 'standard', 'sources': 12},
+            'market': {'scope': 'comprehensive', 'sources': 18},
+            'industry': {'scope': 'comprehensive', 'sources': 18},
+            'company': {'scope': 'standard', 'sources': 12},
+            'startup': {'scope': 'standard', 'sources': 12},
+
+            # Technical indicators
+            'technical': {'scope': 'comprehensive', 'sources': 15},
+            'engineering': {'scope': 'comprehensive', 'sources': 18},
+            'technology': {'scope': 'comprehensive', 'sources': 15},
+            'software': {'scope': 'standard', 'sources': 12},
+            'programming': {'scope': 'standard', 'sources': 12},
+
+            # News indicators
+            'news': {'scope': 'standard', 'sources': 12},
+            'latest': {'scope': 'standard', 'sources': 10},
+            'recent': {'scope': 'standard', 'sources': 10},
+            'current': {'scope': 'standard', 'sources': 10},
+            'breaking': {'scope': 'limited', 'sources': 8},
+
+            # Analysis indicators
+            'analysis': {'scope': 'comprehensive', 'sources': 18},
+            'evaluate': {'scope': 'comprehensive', 'sources': 18},
+            'compare': {'scope': 'comprehensive', 'sources': 15},
+            'review': {'scope': 'comprehensive', 'sources': 18},
+            'assessment': {'scope': 'comprehensive', 'sources': 18}
+        }
+
+        # Check for topic indicators
+        for indicator, params in topic_indicators.items():
+            if indicator in topic_lower:
+                intelligent_params['scope'] = params['scope']
+                intelligent_params['sources_requested'] = params['sources']
+                self.logger.info(f"Topic analysis: found '{indicator}' → scope={params['scope']}, sources={params['sources']}")
+                break
+
+        # Length-based adjustment
+        word_count = len(topic.split())
+        if word_count > 15:  # Long, complex topics
+            intelligent_params['scope'] = 'comprehensive'
+            intelligent_params['sources_requested'] = max(intelligent_params['sources_requested'], 18)
+        elif word_count < 5:  # Short, simple topics
+            intelligent_params['scope'] = 'limited'
+            intelligent_params['sources_requested'] = min(intelligent_params['sources_requested'], 10)
+
+        # Question-based analysis
+        if '?' in topic:
+            question_words = ['what', 'how', 'why', 'when', 'where', 'who', 'which']
+            if any(qword in topic_lower for qword in question_words):
+                intelligent_params['scope'] = 'standard'
+                intelligent_params['sources_requested'] = 12
+
+        # Time-based indicators
+        time_indicators = ['2024', '2023', '2022', '2021', '2020', '2019', '2018']
+        if any(year in topic for year in time_indicators):
+            intelligent_params['scope'] = 'comprehensive'
+            intelligent_params['sources_requested'] = max(intelligent_params['sources_requested'], 15)
+
+        # Multiple topics analysis (indicated by 'and', 'vs', 'versus', 'compare')
+        if any(separator in topic_lower for separator in [' and ', ' vs ', ' versus ', ' compare ']):
+            intelligent_params['scope'] = 'comprehensive'
+            intelligent_params['sources_requested'] = max(intelligent_params['sources_requested'], 20)
+
+        self.logger.info(f"Intelligent topic analysis result: {intelligent_params}")
+        return intelligent_params
+
     def get_parameter_summary(self, parsed_request: ParsedResearchRequest) -> str:
         """
         Get a human-readable summary of the parsed parameters.
@@ -179,7 +298,7 @@ class CLIInputParser:
         if parsed_request.report_type != "default":
             summary_parts.append(f"report_type={parsed_request.report_type}")
 
-        if parsed_request.sources_requested != 10:
+        if parsed_request.sources_requested != 15:
             summary_parts.append(f"sources={parsed_request.sources_requested}")
 
         if parsed_request.crawl_speed != "normal":

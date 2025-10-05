@@ -158,10 +158,16 @@ MANDATORY REPORT GENERATION PROCESS:
 5. When incorporating editorial feedback, PRIORITIZE adding the specific data points, quotes, and facts the editor identified
 6. Call mcp__research_tools__create_research_report with report_type="draft" to format the report
 7. CRITICAL: The create_research_report tool will return "report_content" and "recommended_filepath"
-8. You MUST immediately use the Write tool to save the report_content to the recommended_filepath
-9. IMPORTANT: The recommended_filepath is now an ABSOLUTE PATH - use it exactly as provided
-10. This two-step process (create_research_report then Write) is REQUIRED because MCP tools cannot save files directly
-11. CRITICAL: The tool will automatically add "2-" prefix to your work product filename to indicate this is Work Product 2 (Initial Report)
+8. IMPORTANT: The create_research_report tool ALREADY SAVES THE FILE to the correct session directory location
+9. DO NOT use the Write tool to save the report - the file has already been saved properly
+10. The recommended_filepath shows where the file was saved in the session directory structure
+11. CRITICAL: The tool automatically adds work product numbering (2-, 3-, 4-) and saves to proper session directories
+12. WORK PRODUCT NUMBERING SYSTEM v2.0: Files are automatically organized as:
+    - Work Product 1: /sessions/{session_id}/research/1-*_workproduct.md
+    - Work Product 1B: /sessions/{session_id}/research/1B-*_workproduct.md
+    - Work Product 2: /sessions/{session_id}/working/2-*-report.md
+    - Work Product 3: /sessions/{session_id}/working/3-*-review.md
+    - Work Product 4: /sessions/{session_id}/final/4-*-final.md
 
 EDITORIAL FEEDBACK INTEGRATION REQUIREMENTS:
 - TAKE EDITORIAL COMMENTS SERIOUSLY - They represent critical quality improvements
@@ -209,8 +215,8 @@ REQUIREMENTS: You must generate substantial, professional-quality report content
 
 FAILURE RECOVERY:
 - If research data cannot be loaded, create report based on available information and document gaps
-- If create_research_report tool fails, fall back to direct Write tool with proper formatting
-- If file saving fails, try alternative locations or formats
+- If create_research_report tool fails, try again with different parameters or simplified content
+- If file saving fails, the tool will provide error details - DO NOT manually override with Write tool
 - Always generate some report content, even if research retrieval has issues
 
 Always prioritize depth, accuracy, clarity, and logical organization. Generate reports that demonstrate thorough research analysis and professional writing standards.""",
@@ -330,10 +336,16 @@ EDITORIAL EXECUTION SEQUENCE:
 7. **SEVENTH STEP**: Create final editorial review with specific enhancements and recommendations
 8. Call create_research_report with report_type="editorial_review" to format the final review
 9. CRITICAL: The create_research_report tool will return "report_content" and "recommended_filepath"
-10. You MUST immediately use the Write tool to save the report_content to the recommended_filepath
-11. IMPORTANT: The recommended_filepath is now an ABSOLUTE PATH - use it exactly as provided
-12. This two-step process (create_research_report then Write) is REQUIRED because MCP tools cannot save files directly
-13. CRITICAL: The tool will automatically add "3-" prefix to your editorial review filename to indicate this is Work Product 3 (Editorial Review)
+10. IMPORTANT: The create_research_report tool ALREADY SAVES THE FILE to the correct session directory location
+11. DO NOT use the Write tool to save the report - the file has already been saved properly
+12. The recommended_filepath shows where the file was saved in the session directory structure
+13. CRITICAL: The tool automatically adds work product numbering (3-) and saves to proper session directories
+14. WORK PRODUCT NUMBERING SYSTEM v2.0: Files are automatically organized as:
+    - Work Product 1: /sessions/{session_id}/research/1-*_workproduct.md
+    - Work Product 1B: /sessions/{session_id}/research/1B-*_workproduct.md
+    - Work Product 2: /sessions/{session_id}/working/2-*-report.md
+    - Work Product 3: /sessions/{session_id}/working/3-*-review.md
+    - Work Product 4: /sessions/{session_id}/final/4-*-final.md
 
 EDITORIAL ENHANCEMENT WORKFLOW:
 - **MINE THE DATA**: Extract specific facts, figures, quotes from ALL research sources
@@ -367,8 +379,8 @@ REQUIREMENTS: You must provide substantive editorial analysis with specific exam
 FAILURE RECOVERY:
 - If report files cannot be read, try different file paths or formats
 - If search tools fail during gap-filling, provide editorial review based on existing content
-- If create_research_report tool fails, fall back to direct Write tool with proper formatting
-- If file saving fails, try alternative locations or check permissions
+- If create_research_report tool fails, try again with different parameters or simplified content
+- If file saving fails, the tool will provide error details - DO NOT manually override with Write tool
 - Always generate some editorial feedback, even if search enhancement has issues
 
 SEARCH BUDGET AWARENESS:

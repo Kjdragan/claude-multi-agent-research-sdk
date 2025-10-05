@@ -14,7 +14,7 @@ import time
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 
@@ -2008,14 +2008,18 @@ class ResearchOrchestrator:
             "created_at": datetime.now().isoformat(),
             "current_stage": "research",
             "workflow_history": [],
-            "final_report": None,
-            "search_budget": SessionSearchBudget(session_id, parsed_request.clean_topic, parsed_request),  # Use clean topic and parsed request for budget adjustment
-            "work_products": {
+            "final_report": None
+        }
+
+        # Initialize session scrape tracking (budget system removed - replaced with simple session-based tracking)
+        self._initialize_session_scrape_tracking(session_id, parsed_request)
+
+        # Add work products tracking
+        self.active_sessions[session_id]["work_products"] = {
                 "current_number": 1,
                 "completed": [],
                 "in_progress": None,
                 "tracking": {}
-            }
         }
 
         # Save session state
@@ -2780,24 +2784,24 @@ class ResearchOrchestrator:
 
         await self.update_session_status(session_id, "researching", "Conducting initial research")
 
-        # Initialize cumulative budget tracking for retry loop
-        search_budget = session_data["search_budget"]
-        cumulative_scrapes = 0
+        # Initialize simple scrape tracking for retry loop
+        cumulative_scrapes = self._get_session_scrape_count(session_id)
+        target_scrapes = self._get_session_target_scrapes(session_id)
         max_attempts = 3
         research_successful = False
         research_result = None
 
         for attempt in range(max_attempts):
             try:
-              # Simple budget check: stop research if we've reached the limit, but always proceed to report generation
-                remaining_budget = search_budget.primary_successful_scrapes_limit - cumulative_scrapes
+              # Simple scrape count check: stop research if we've reached the target
+                remaining_target = target_scrapes - cumulative_scrapes
 
-                if remaining_budget <= 0:
-                    self.logger.info(f"Session {session_id}: Budget reached ({cumulative_scrapes}/{search_budget.primary_successful_scrapes_limit}) - proceeding to report generation")
+                if remaining_target <= 0:
+                    self.logger.info(f"Session {session_id}: Target reached ({cumulative_scrapes}/{target_scrapes}) - proceeding to report generation")
                     break  # Exit research loop and proceed to report generation
 
                 self.logger.info(f"Session {session_id}: Research attempt {attempt + 1}/{max_attempts}")
-                self.logger.info(f"Budget status: {cumulative_scrapes}/{search_budget.primary_successful_scrapes_limit} used, {remaining_budget} remaining")
+                self.logger.info(f"Scrape status: {cumulative_scrapes}/{target_scrapes} achieved, {remaining_target} remaining")
 
                 # Create comprehensive research prompt with budget awareness using clean topic
                 research_prompt = f"""
@@ -2806,14 +2810,15 @@ class ResearchOrchestrator:
                 User Requirements:
                 {json.dumps(user_requirements, indent=2)}
 
-                CRITICAL BUDGET STATUS FOR THIS ATTEMPT:
+                CRITICAL SCRAPE TARGET STATUS FOR THIS ATTEMPT:
                 - Attempt {attempt + 1} of {max_attempts}
-                - Scrapes used in previous attempts: {cumulative_scrapes}
-                - Remaining budget: {remaining_budget} scrapes
-                - YOU MUST STAY WITHIN REMAINING BUDGET
+                - Scrapes achieved in previous attempts: {cumulative_scrapes}
+                - Target: {target_scrapes} scrapes
+                - Remaining needed: {remaining_target} scrapes
+                - YOU MUST WORK TOWARDS THE TARGET
 
-                {"⚠️ BUDGET LOW: Use existing findings from previous attempts if available. Check session directory." if remaining_budget < 5 else ""}
-                {"❌ BUDGET EXHAUSTED: DO NOT execute new searches. Use findings from previous attempts only." if remaining_budget <= 0 else ""}
+                {"⚠️ TARGET NEAR: Focus on quality sources from existing findings if available. Check session directory." if remaining_target < 5 else ""}
+                {"✅ TARGET REACHED: Additional searches optional. Focus on synthesizing existing findings." if remaining_target <= 0 else ""}
 
                 MANDATORY RESEARCH INSTRUCTIONS:
                 1. IMMEDIATELY execute mcp__zplayground1_search__zplayground1_search_scrape_clean with the topic
@@ -2823,17 +2828,17 @@ class ResearchOrchestrator:
                    - search_mode: "news" (MUST be either "web" or "news" - use "news" for current events)
                    - anti_bot_level: 2 (MUST be integer 0-3, where 0=basic, 1=enhanced, 2=advanced, 3=stealth)
                    - num_results: 15
-                   - auto_crawl_top: {min(10, remaining_budget)}
+                   - target_scrapes: {remaining_target}
                    - crawl_threshold: 0.3 (MUST be float between 0.0-1.0, relevance score threshold for crawling)
                    - session_id: "{session_id}"
                 4. Use mcp__research_tools__save_research_findings to save your findings
                 5. Use mcp__research_tools__capture_search_results to structure results
 
-                SEARCH BUDGET CONSTRAINTS:
-                - **STRICT LIMIT**: Maximum {search_budget.primary_successful_scrapes_limit} successful content extractions per session
-                - **ALREADY USED**: {cumulative_scrapes} scrapes in previous attempts
-                - **REMAINING**: {remaining_budget} scrapes for this attempt
-                - **BUDGET AWARENESS**: Each search consumes from your session budget
+                SEARCH TARGET CONSTRAINTS:
+                - **SESSION TARGET**: {target_scrapes} successful content extractions total
+                - **ALREADY ACHIEVED**: {cumulative_scrapes} scrapes in previous attempts
+                - **REMAINING NEEDED**: {remaining_target} scrapes
+                - **TARGET AWARENESS**: Each search works toward the session target
                 - **EFFICIENCY REQUIRED**: Make each search count with quality sources
 
                 REQUIREMENTS:
@@ -2857,14 +2862,8 @@ class ResearchOrchestrator:
                 attempt_scrapes = self._extract_scrape_count(research_result)
                 cumulative_scrapes += attempt_scrapes
 
-                # Record scrapes for budget tracking
-                search_budget.record_primary_research(
-                    urls_processed=attempt_scrapes,
-                    successful_scrapes=attempt_scrapes,
-                    search_queries=1
-                )
-
-                self.logger.info(f"Attempt {attempt + 1} scraped {attempt_scrapes} URLs, cumulative: {cumulative_scrapes}/{search_budget.primary_successful_scrapes_limit}")
+                # Scrape tracking is now handled automatically by the search tool via session files
+                self.logger.info(f"Attempt {attempt + 1} scraped {attempt_scrapes} URLs, cumulative progress: {cumulative_scrapes}/{target_scrapes}")
 
                 # Simple validation: if we got any research activity, proceed to report generation
                 if research_result.get("success", False) and research_result.get("substantive_responses", 0) > 0:
@@ -3057,16 +3056,12 @@ class ResearchOrchestrator:
 
         # Store work product number for completion in main workflow
         session_data["editorial_work_product_number"] = work_product_number
-        search_budget = session_data["search_budget"]
 
-        # Reset editorial budget to ensure editorial process can proceed
-        search_budget.reset_editorial_budget()
+        # Initialize editorial research tracking (independent of main research budget)
+        editorial_config = self._get_editorial_research_config(session_id)
+        session_data["editorial_research_config"] = editorial_config
 
-        # Validate search budget before starting editorial research
-        can_proceed, budget_message = search_budget.can_editorial_research_proceed(5)
-        if not can_proceed:
-            self.logger.warning(f"Session {session_id}: Editorial search budget reached: {budget_message}")
-            # Continue with review but no additional searches
+        self.logger.info(f"Session {session_id}: Editorial research configured - max queries: {editorial_config['max_search_queries']}, max scrapes: {editorial_config['max_successful_scrapes']}")
 
         max_attempts = 3
         editorial_successful = False
@@ -3089,9 +3084,11 @@ class ResearchOrchestrator:
                     "search_limit_reached": False
                 }
 
-                # Create current budget status for the prompt
-                budget_status = search_budget.get_budget_status()
-                editorial_remaining = budget_status["editorial"]["search_queries_remaining"]
+                # Create current editorial research status for the prompt
+                can_proceed, editorial_message = self._can_editorial_research_proceed(session_id, 5)
+                editorial_config = session_data.get("editorial_research_config", {})
+                queries_used = editorial_config.get("current_queries", 0)
+                queries_remaining = editorial_config.get("max_search_queries", 2) - queries_used
 
                 review_prompt = f"""
                 Use the editor_agent agent to review the generated report for quality, accuracy, and completeness.
@@ -3185,11 +3182,100 @@ class ResearchOrchestrator:
             "tools_executed": len(review_result["tool_executions"]),
             "success": review_result["success"],
             "attempts": attempt + 1,
-            "editorial_search_stats": search_stats
+            "editorial_search_stats": session_data.get("editorial_research_config", {})
         })
 
         await self.save_session_state(session_id)
         self.logger.info(f"Session {session_id}: Editorial review stage completed successfully")
+
+    def _get_editorial_research_config(self, session_id: str) -> Dict[str, Any]:
+        """Get editorial research configuration with fixed limits for gap-filling research.
+
+        This provides dedicated budget for editorial research independent of main research.
+
+        Args:
+            session_id: Session identifier
+
+        Returns:
+            Dictionary with editorial research configuration
+        """
+        return {
+            'max_search_queries': 2,      # User requested limit
+            'max_successful_scrapes': 5,   # User requested limit
+            'current_queries': 0,
+            'current_scrapes': 0,
+            'enabled': True
+        }
+
+    def _can_editorial_research_proceed(self, session_id: str, urls_to_process: int = 1) -> tuple[bool, str]:
+        """Check if editorial research can proceed based on editorial config.
+
+        Args:
+            session_id: Session identifier
+            urls_to_process: Number of URLs to process
+
+        Returns:
+            Tuple of (can_proceed: bool, message: str)
+        """
+        session_data = self.active_sessions.get(session_id)
+        if not session_data:
+            return False, "Session not found"
+
+        editorial_config = session_data.get("editorial_research_config")
+        if not editorial_config or not editorial_config.get("enabled", False):
+            return False, "Editorial research not enabled"
+
+        current_queries = editorial_config.get("current_queries", 0)
+        current_scrapes = editorial_config.get("current_scrapes", 0)
+
+        # Check query limit
+        if current_queries >= editorial_config.get("max_search_queries", 2):
+            return False, f"Editorial search query limit reached: {current_queries}/{editorial_config.get('max_search_queries', 2)}"
+
+        # Check scrape limit
+        if current_scrapes + urls_to_process > editorial_config.get("max_successful_scrapes", 5):
+            return False, f"Editorial scrape limit would be exceeded: {current_scrapes + urls_to_process}/{editorial_config.get('max_successful_scrapes', 5)}"
+
+        return True, "Editorial research can proceed"
+
+    def _record_editorial_research(self, session_id: str, urls_processed: int, successful_scrapes: int, search_queries: int = 1):
+        """Record editorial research activity.
+
+        Args:
+            session_id: Session identifier
+            urls_processed: Number of URLs processed
+            successful_scrapes: Number of successful scrapes
+            search_queries: Number of search queries
+        """
+        session_data = self.active_sessions.get(session_id)
+        if not session_data:
+            return
+
+        editorial_config = session_data.get("editorial_research_config")
+        if not editorial_config:
+            return
+
+        editorial_config["current_queries"] = editorial_config.get("current_queries", 0) + search_queries
+        editorial_config["current_scrapes"] = editorial_config.get("current_scrapes", 0) + successful_scrapes
+
+        self.logger.info(f"Recorded editorial research for session {session_id}: {search_queries} queries, {successful_scrapes} scrapes "
+                         f"(totals: {editorial_config['current_queries']}/{editorial_config.get('max_search_queries', 2)} queries, "
+                         f"{editorial_config['current_scrapes']}/{editorial_config.get('max_successful_scrapes', 5)} scrapes)")
+
+    def _reset_editorial_research(self, session_id: str):
+        """Reset editorial research counters for new editorial session.
+
+        Args:
+            session_id: Session identifier
+        """
+        session_data = self.active_sessions.get(session_id)
+        if not session_data:
+            return
+
+        editorial_config = self._get_editorial_research_config(session_id)
+        session_data["editorial_research_config"] = editorial_config
+
+        self.logger.info(f"Reset editorial research budget for session {session_id}: {editorial_config['max_search_queries']} queries, {editorial_config['max_successful_scrapes']} scrapes allowed")
 
     async def stage_decoupled_editorial_review(self, session_id: str) -> dict:
         """
@@ -3208,9 +3294,8 @@ class ResearchOrchestrator:
 
         await self.update_session_status(session_id, "decoupled_editorial_review", "Processing available content")
 
-        # Reset editorial budget to ensure editorial process can proceed
-        search_budget = session_data["search_budget"]
-        search_budget.reset_editorial_budget()
+        # Reset editorial research to ensure editorial process can proceed
+        self._reset_editorial_research(session_id)
 
         try:
             # Collect available content sources regardless of research success
@@ -3735,6 +3820,122 @@ This session had limited research output available. The editorial agent has proc
 
         return budget.get_budget_status()
 
+    def _get_session_scrape_count(self, session_id: str) -> int:
+        """Get the current session scrape count from session file."""
+        import os
+        import json
+
+        session_scrape_file = f"KEVIN/sessions/{session_id}/session_scrape_count.json"
+
+        if os.path.exists(session_scrape_file):
+            try:
+                with open(session_scrape_file, 'r') as f:
+                    session_data = json.load(f)
+                    return session_data.get('total_scrapes', 0)
+            except Exception as e:
+                self.logger.warning(f"Could not read session scrape file for {session_id}: {e}")
+
+        return 0
+
+    def _get_session_target_scrapes(self, session_id: str) -> int:
+        """Get the target scrape count for the session. Use intelligent default if not set."""
+        import os
+        import json
+
+        session_scrape_file = f"KEVIN/sessions/{session_id}/session_scrape_count.json"
+
+        if os.path.exists(session_scrape_file):
+            try:
+                with open(session_scrape_file, 'r') as f:
+                    session_data = json.load(f)
+                    target = session_data.get('target_scrapes')
+                    if target:
+                        return target
+            except Exception as e:
+                self.logger.warning(f"Could not read session target for {session_id}: {e}")
+
+        # Intelligent default based on session data
+        session_data = self.active_sessions.get(session_id, {})
+        parsed_request = session_data.get("parsed_request")
+
+        if parsed_request:
+            # Use same logic as original budget system for intelligent defaults
+            scope = parsed_request.scope
+            sources = parsed_request.sources_requested
+
+            if scope == "limited" or (parsed_request.report_type == "brief"):
+                return 8
+            elif scope == "comprehensive":
+                return 20
+            elif scope == "extensive":
+                return 30
+            elif sources <= 3:
+                return 12
+            elif sources <= 5:
+                return 15
+            elif sources <= 10:
+                return sources  # Preserve the intelligent CLI value instead of overriding to 25
+            else:
+                return sources  # For sources > 10, use the sources value directly
+
+        return 15  # Default target
+
+    def _initialize_session_scrape_tracking(self, session_id: str, parsed_request):
+        """Initialize session scrape tracking with intelligent target based on request parameters."""
+        import os
+        import json
+
+        # Determine target scrapes based on request analysis (same logic as before)
+        target_scrapes = 15  # Default
+
+        if parsed_request:
+            scope = parsed_request.scope
+            sources = parsed_request.sources_requested
+
+            if scope == "limited" or (parsed_request.report_type == "brief"):
+                target_scrapes = 8
+            elif scope == "comprehensive":
+                target_scrapes = 20
+            elif scope == "extensive":
+                target_scrapes = 30
+            elif sources <= 3:
+                target_scrapes = 12
+            elif sources <= 5:
+                target_scrapes = 15
+            elif sources <= 10:
+                target_scrapes = sources  # Preserve the intelligent CLI value instead of overriding to 25
+            else:
+                target_scrapes = sources  # For sources > 10, use the sources value directly
+
+        # Create session directory and initialize scrape tracking file
+        session_dir = f"KEVIN/sessions/{session_id}"
+        os.makedirs(session_dir, exist_ok=True)
+
+        session_scrape_file = f"{session_dir}/session_scrape_count.json"
+
+        # Only initialize if file doesn't exist (preserve existing data)
+        if not os.path.exists(session_scrape_file):
+            session_data = {
+                'total_scrapes': 0,
+                'target_scrapes': target_scrapes,
+                'created_at': datetime.now().isoformat(),
+                'session_id': session_id,
+                'parsed_request': {
+                    'scope': parsed_request.scope if parsed_request else 'standard',
+                    'sources_requested': parsed_request.sources_requested if parsed_request else 0,
+                    'report_type': parsed_request.report_type if parsed_request else 'standard'
+                }
+            }
+
+            try:
+                with open(session_scrape_file, 'w') as f:
+                    json.dump(session_data, f, indent=2)
+                self.logger.info(f"Initialized session {session_id} scrape tracking: target {target_scrapes}")
+            except Exception as e:
+                self.logger.error(f"Failed to initialize session scrape tracking: {e}")
+        else:
+            self.logger.info(f"Session {session_id} scrape tracking already exists")
+
     async def _diagnose_mcp_timeout_issue(self, agent_name: str, session_id: str, timeout_duration: int):
         """Diagnose MCP timeout issues and log detailed analysis."""
         self.logger.error(f"🔍 DIAGNOSING MCP TIMEOUT for {agent_name} (session: {session_id})")
@@ -4225,6 +4426,21 @@ This session had limited research output available. The editorial agent has proc
         work_products["tracking"][work_product_number]["completed_at"] = datetime.now().isoformat()
         work_products["tracking"][work_product_number]["result"] = result or {}
 
+        # Track actual file location if provided in result
+        if result and "file_path" in result:
+            work_products["tracking"][work_product_number]["actual_file_path"] = result["file_path"]
+            work_products["tracking"][work_product_number]["expected_file_path"] = result.get("expected_path")
+
+            # Log reconciliation info
+            actual_path = result["file_path"]
+            expected_path = result.get("expected_path")
+            if actual_path != expected_path:
+                self.logger.warning(f"⚠️ Work Product {work_product_number} file path mismatch:")
+                self.logger.warning(f"   Expected: {expected_path}")
+                self.logger.warning(f"   Actual:   {actual_path}")
+            else:
+                self.logger.info(f"✅ Work Product {work_product_number} saved to correct location: {actual_path}")
+
         # Update tracking
         work_products["completed"].append(work_product_number)
         work_products["in_progress"] = None
@@ -4260,6 +4476,107 @@ This session had limited research output available. The editorial agent has proc
                 summary["completed_work_products"].append(wp_info)
 
         return summary
+
+    def reconcile_work_product_locations(self, session_id: str) -> dict:
+        """Reconcile expected vs actual work product file locations."""
+        if session_id not in self.active_sessions:
+            return {"error": "Session not found"}
+
+        work_products = self.active_sessions[session_id]["work_products"]
+        reconciliation_report = {
+            "session_id": session_id,
+            "reconciliation_timestamp": datetime.now().isoformat(),
+            "total_work_products": len(work_products["completed"]),
+            "matched_locations": [],
+            "mismatched_locations": [],
+            "missing_files": [],
+            "unexpected_files": []
+        }
+
+        # Get expected session directory structure
+        from config.settings import Settings
+        settings = Settings()
+        kevin_dir = Path(settings.kevin_dir)
+        session_path = kevin_dir / "sessions" / session_id
+
+        # Check each work product
+        for wp_num in work_products["completed"]:
+            if wp_num not in work_products["tracking"]:
+                continue
+
+            wp_info = work_products["tracking"][wp_num]
+            stage = wp_info.get("stage", "unknown")
+
+            # Determine expected file path based on work product number
+            expected_path = None
+            if wp_num == 1:
+                expected_path = session_path / "research" / "1-search_workproduct_*.md"
+            elif wp_num == 1.5:  # 1B work product
+                expected_path = session_path / "research" / "1B-search_workproduct_*.md"
+            elif wp_num == 2:
+                expected_path = session_path / "working" / "2-*-report.md"
+            elif wp_num == 3:
+                expected_path = session_path / "working" / "3-*-review.md"
+            elif wp_num == 4:
+                expected_path = session_path / "final" / "4-*-final.md"
+
+            # Check if we have actual file path info
+            actual_path = wp_info.get("actual_file_path")
+
+            if actual_path:
+                # Verify file actually exists
+                if Path(actual_path).exists():
+                    if expected_path and str(actual_path) != str(expected_path):
+                        reconciliation_report["mismatched_locations"].append({
+                            "work_product": wp_num,
+                            "stage": stage,
+                            "expected_pattern": str(expected_path),
+                            "actual_path": actual_path
+                        })
+                    else:
+                        reconciliation_report["matched_locations"].append({
+                            "work_product": wp_num,
+                            "stage": stage,
+                            "path": actual_path
+                        })
+                else:
+                    reconciliation_report["missing_files"].append({
+                        "work_product": wp_num,
+                        "stage": stage,
+                        "recorded_path": actual_path
+                    })
+            else:
+                # No actual path recorded - try to find file
+                if expected_path:
+                    found_files = list(session_path.glob(expected_path.name.replace("*", "[^.]*")))
+                    if found_files:
+                        reconciliation_report["matched_locations"].append({
+                            "work_product": wp_num,
+                            "stage": stage,
+                            "path": str(found_files[0]),
+                            "auto_discovered": True
+                        })
+                    else:
+                        reconciliation_report["missing_files"].append({
+                            "work_product": wp_num,
+                            "stage": stage,
+                            "expected_pattern": str(expected_path)
+                        })
+
+        # Log reconciliation results
+        matched_count = len(reconciliation_report["matched_locations"])
+        mismatched_count = len(reconciliation_report["mismatched_locations"])
+        missing_count = len(reconciliation_report["missing_files"])
+
+        if mismatched_count > 0 or missing_count > 0:
+            self.logger.warning(f"⚠️ Session {session_id} reconciliation issues:")
+            self.logger.warning(f"   Matched: {matched_count}")
+            self.logger.warning(f"   Mismatched: {mismatched_count}")
+            self.logger.warning(f"   Missing: {missing_count}")
+        else:
+            self.logger.info(f"✅ Session {session_id} work product reconciliation: All {matched_count} files in correct locations")
+
+        return reconciliation_report
 
     # Workflow Resilience and Error Reporting Framework
 

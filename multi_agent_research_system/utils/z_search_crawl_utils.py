@@ -393,7 +393,8 @@ async def search_crawl_and_clean_direct(
     max_concurrent: int = 15,
     session_id: str = "default",
     anti_bot_level: int = 1,
-    workproduct_dir: str = None
+    workproduct_dir: str = None,
+    target_scrapes: int = 15
 ) -> str:
     """
     Combined search, crawl, and clean operation using zPlayground1 technology.
@@ -420,7 +421,39 @@ async def search_crawl_and_clean_direct(
     """
     try:
         start_time = datetime.now()
-        logger.info(f"Starting enhanced search+crawl+clean for query: '{query}' (anti_bot_level: {anti_bot_level})")
+        logger.info(f"Starting enhanced search+crawl+clean for query: '{query}' (anti_bot_level: {anti_bot_level}, target_scrapes: {target_scrapes})")
+
+        # Step 0: Check session scrape count and adjust target
+        import os
+        import json
+
+        session_scrape_file = f"KEVIN/sessions/{session_id}/session_scrape_count.json"
+        existing_scrapes = 0
+
+        # Create session directory if it doesn't exist
+        os.makedirs(f"KEVIN/sessions/{session_id}", exist_ok=True)
+
+        # Load existing scrape count
+        if os.path.exists(session_scrape_file):
+            try:
+                with open(session_scrape_file, 'r') as f:
+                    session_data = json.load(f)
+                    existing_scrapes = session_data.get('total_scrapes', 0)
+                logger.info(f"Session {session_id} has {existing_scrapes} existing scrapes")
+            except Exception as e:
+                logger.warning(f"Could not read session scrape file: {e}")
+
+        # Calculate remaining scrapes needed
+        remaining_scrapes = max(0, target_scrapes - existing_scrapes)
+        if remaining_scrapes == 0:
+            logger.info(f"Session {session_id} has already reached target of {target_scrapes} scrapes")
+            return f"✅ **Target Already Reached**\n\nSession has already achieved {target_scrapes} successful scrapes. No additional crawling needed."
+
+        logger.info(f"Session {session_id} needs {remaining_scrapes} more scrapes to reach target of {target_scrapes}")
+
+        # Adjust auto_crawl_top to not exceed remaining target
+        effective_crawl_top = min(auto_crawl_top, remaining_scrapes)
+        logger.info(f"Adjusted crawling limit from {auto_crawl_top} to {effective_crawl_top} based on session target")
 
         # Step 1: Intelligent search strategy selection
         from utils.search_strategy_selector import get_search_strategy_selector
@@ -455,7 +488,7 @@ async def search_crawl_and_clean_direct(
         # Step 2: Select URLs for crawling based on relevance
         urls_to_crawl = select_urls_for_crawling(
             search_results=search_results,
-            limit=auto_crawl_top,
+            limit=effective_crawl_top,
             min_relevance=crawl_threshold
         )
 
@@ -518,6 +551,28 @@ async def search_crawl_and_clean_direct(
                 'word_count': result.word_count,
                 'char_count': result.char_count
             })
+
+        # Step 4.5: Update session scrape count
+        successful_scrapes = len(crawled_content_list)
+        new_total_scrapes = existing_scrapes + successful_scrapes
+
+        # Update session scrape count file
+        session_data = {
+            'total_scrapes': new_total_scrapes,
+            'target_scrapes': target_scrapes,
+            'last_updated': datetime.now().isoformat(),
+            'session_id': session_id,
+            'query': query,
+            'successful_urls_this_run': successful_urls,
+            'scrapes_this_run': successful_scrapes
+        }
+
+        try:
+            with open(session_scrape_file, 'w') as f:
+                json.dump(session_data, f, indent=2)
+            logger.info(f"Updated session {session_id}: {existing_scrapes} + {successful_scrapes} = {new_total_scrapes} total scrapes")
+        except Exception as e:
+            logger.error(f"Failed to update session scrape file: {e}")
 
         if crawled_content_list:
 
@@ -805,7 +860,8 @@ async def news_search_and_crawl_direct(
     auto_crawl_top: int = 10,
     session_id: str = "default",
     anti_bot_level: int = 1,
-    workproduct_dir: str = None
+    workproduct_dir: str = None,
+    target_scrapes: int = 15
 ) -> str:
     """
     Specialized news search with content extraction using enhanced technology.
@@ -833,7 +889,8 @@ async def news_search_and_crawl_direct(
         max_concurrent=15,  # Increased concurrency for more URLs
         session_id=session_id,
         anti_bot_level=anti_bot_level,
-        workproduct_dir=workproduct_dir
+        workproduct_dir=workproduct_dir,
+        target_scrapes=target_scrapes
     )
 
 

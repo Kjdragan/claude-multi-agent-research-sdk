@@ -10,7 +10,9 @@
       "Bash(uv run:*)",
       "Bash(find:*)",
       "Bash(timeout:*)",
-      "Bash(env)"
+      "Bash(env)",
+      "Bash(tree:*)",
+      "Bash(mkdir:*)"
     ],
     "deny": [],
     "ask": []

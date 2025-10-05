@@ -107,6 +107,13 @@ def create_zplayground1_mcp_server():
                 "type": "string",
                 "default": "",
                 "description": "Optional prefix for work product filenames (e.g., 'editor research' for editorial work)"
+            },
+            "target_scrapes": {
+                "type": "integer",
+                "default": 15,
+                "minimum": 1,
+                "maximum": 50,
+                "description": "Target number of successful content extractions - tool will automatically stop when reached"
             }
         }
     )
@@ -181,6 +188,10 @@ def create_zplayground1_mcp_server():
                 if not (1 <= max_concurrent <= 20):
                     raise ValueError(f"Invalid max_concurrent '{max_concurrent}'. Must be between 1 and 20")
 
+                target_scrapes = int(args.get("target_scrapes", 15))
+                if not (1 <= target_scrapes <= 50):
+                    raise ValueError(f"Invalid target_scrapes '{target_scrapes}'. Must be between 1 and 50")
+
                 session_id = args.get("session_id", "default")
                 workproduct_prefix = args.get("workproduct_prefix", "")
 
@@ -212,7 +223,8 @@ def create_zplayground1_mcp_server():
                     auto_crawl_top=auto_crawl_top,
                     session_id=session_id,
                     anti_bot_level=anti_bot_level,
-                    workproduct_dir=None  # Let function use session-based structure
+                    workproduct_dir=None,  # Let function use session-based structure
+                    target_scrapes=target_scrapes
                 )
             else:
                 # Use web search and crawl
@@ -225,7 +237,8 @@ def create_zplayground1_mcp_server():
                     max_concurrent=max_concurrent,
                     session_id=session_id,
                     anti_bot_level=anti_bot_level,
-                    workproduct_dir=None  # Let function use session-based structure
+                    workproduct_dir=None,  # Let function use session-based structure
+                    target_scrapes=target_scrapes
                 )
 
             # Apply MCP compliance with multi-level content allocation
