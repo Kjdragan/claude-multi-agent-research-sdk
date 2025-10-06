@@ -267,35 +267,52 @@ def save_work_product(
         Path to saved work product file
     """
     try:
+        # GATHER CONTEXT: Log current state before action
+        logger.info(f"🔧 save_work_product called:")
+        logger.info(f"   session_id: {session_id}")
+        logger.info(f"   workproduct_dir param: {workproduct_dir}")
+        logger.info(f"   search_results: {len(search_results)} items")
+        logger.info(f"   crawled_content: {len(crawled_content)} items")
+        logger.info(f"   urls: {len(urls)} items")
+
         # Determine correct session directory structure
         if workproduct_dir is None:
-            # Default to KEVIN sessions directory with proper categorical organization
+            # Default to KEVIN sessions directory - save to research/ for Work Product 1
             base_sessions_dir = "/home/kjdragan/lrepos/claude-agent-sdk-python/KEVIN/sessions"
             session_dir = os.path.join(base_sessions_dir, session_id)
-            research_dir = os.path.join(session_dir, "research")
-            Path(research_dir).mkdir(parents=True, exist_ok=True)
+            # Save to research/ directory for raw SERP metadata + scraped content
+            working_dir = os.path.join(session_dir, "research")
+            Path(working_dir).mkdir(parents=True, exist_ok=True)
 
-            # Generate timestamp and filename with numbered prefix + suffix
+            # Generate timestamp and sanitized topic for filename
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            # Sanitize query for filename
+            sanitized_query = query.replace(' ', '-').replace('/', '-')[:50].lower()
 
-            # Count existing research files to determine suffix (1, 1A, 1B, 1C, etc.)
-            existing_files = list(Path(research_dir).glob("1*-search_workproduct_*.md"))
+            # Count existing Work Product 1 files to determine suffix (1, 1A, 1B, 1C, etc.)
+            existing_files = list(Path(working_dir).glob("1*-*.md"))
             if not existing_files:
-                # First research file - no suffix
+                # First Work Product 1 - no suffix
                 prefix = "1"
             else:
                 # Calculate suffix based on count (A, B, C, D, etc.)
                 suffix_letter = chr(65 + len(existing_files))  # 65 is ASCII for 'A'
                 prefix = f"1{suffix_letter}"
 
-            filename = f"{prefix}-search_workproduct_{timestamp}.md"
-            filepath = os.path.join(research_dir, filename)
+            filename = f"{prefix}-{sanitized_query}-search-results.md"
+            filepath = os.path.join(working_dir, filename)
+            logger.info(f"   Using KEVIN structure: {working_dir}")
+            logger.info(f"   Filename will be: {filename}")
+            logger.info(f"   Full path: {filepath}")
         else:
             # Custom workproduct directory (legacy support)
             Path(workproduct_dir).mkdir(parents=True, exist_ok=True)
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"enhanced-search-crawl-workproduct_{timestamp}.md"
             filepath = os.path.join(workproduct_dir, filename)
+            logger.info(f"   Using custom dir: {workproduct_dir}")
+            logger.info(f"   Filename: {filename}")
+            logger.info(f"   Full path: {filepath}")
 
         # Build work product content
         workproduct_content = [
@@ -378,14 +395,32 @@ def save_work_product(
         ])
 
         # Write to file
+        logger.info(f"🔧 Writing {len(workproduct_content)} lines to file...")
         with open(filepath, 'w', encoding='utf-8') as f:
             f.write('\n'.join(workproduct_content))
 
+        # VERIFY WORK: Check file was actually written (SDK principle!)
+        if not os.path.exists(filepath):
+            logger.error(f"❌ File write failed - file does not exist: {filepath}")
+            return ""
+
+        file_size = os.path.getsize(filepath)
+        if file_size == 0:
+            logger.error(f"❌ File write failed - file is empty: {filepath}")
+            return ""
+
         logger.info(f"✅ Work product saved to: {filepath}")
+        logger.info(f"   File size: {file_size:,} bytes")
+        logger.info(f"   Content: {len(search_results)} search results, {len(crawled_content)} articles")
         return filepath
 
     except Exception as e:
-        logger.error(f"Error saving work product: {e}")
+        logger.error(f"❌ Error saving work product:")
+        logger.error(f"   Session: {session_id}")
+        logger.error(f"   Query: {query}")
+        logger.error(f"   Workproduct dir: {workproduct_dir}")
+        logger.error(f"   Exception: {e}")
+        logger.exception("Full traceback:")
         return ""
 
 
@@ -782,7 +817,7 @@ async def execute_expanded_search_with_iterative_scraping(
         logger.info(f"After processing: {len(deduplicated_results)} unique URLs ready for scraping")
 
         # Step 5: Process URLs in adaptive batches until target reached
-        final_results = await process_scraping_in_batches(
+        batch_results, cleaned_content, successful_urls = await process_scraping_in_batches(
             deduplicated_results,
             session_id,
             target_scrapes,
@@ -790,7 +825,34 @@ async def execute_expanded_search_with_iterative_scraping(
             config
         )
 
-        # Step 6: Format and return results
+        # Step 6: Save Work Product 1 (SERP metadata + scraped content)
+        logger.info(f"📋 Saving Work Product 1: SERP metadata + scraped content (expanded search)")
+        logger.info(f"   Session: {session_id}")
+        logger.info(f"   Search results: {len(deduplicated_results)}")
+        logger.info(f"   Cleaned content: {len(cleaned_content)}")
+
+        work_product_path = save_work_product(
+            search_results=deduplicated_results,
+            crawled_content=cleaned_content,
+            urls=successful_urls,
+            query=query,
+            session_id=session_id,
+            workproduct_dir=None  # Use session-based structure
+        )
+
+        # VERIFY WORK (Critical SDK principle!)
+        import os
+        if work_product_path and os.path.exists(work_product_path):
+            file_size = os.path.getsize(work_product_path)
+            logger.info(f"✅ Work Product 1 VERIFIED: {work_product_path}")
+            logger.info(f"   File size: {file_size:,} bytes")
+            logger.info(f"   Contains: {len(deduplicated_results)} search results, {len(cleaned_content)} crawled articles")
+        else:
+            logger.error(f"❌ CRITICAL: Work Product 1 file NOT FOUND after save!")
+            logger.error(f"   Expected path: {work_product_path}")
+            logger.error(f"   Session: {session_id}")
+
+        # Step 7: Format and return results
         processing_time = (datetime.now() - start_time).total_seconds()
         summary = f"""
 # Expanded Search Results
@@ -800,8 +862,9 @@ async def execute_expanded_search_with_iterative_scraping(
 **Unique URLs Found**: {len(deduplicated_results)}
 **Processing Time**: {processing_time:.1f} seconds
 **Queries**: {', '.join(f'"{q}"' for q in queries)}
+**Work Product 1 Saved**: {work_product_path if work_product_path else 'FAILED'}
 
-{final_results}
+{batch_results}
 
 ---
 *Results generated using expanded search with iterative batch processing*
@@ -820,7 +883,7 @@ async def process_scraping_in_batches(
     target_scrapes: int,
     anti_bot_level: int,
     config
-) -> str:
+) -> tuple[str, list, list]:
     """
     Process search results in adaptive batches until target scrapes reached.
 
@@ -838,7 +901,7 @@ async def process_scraping_in_batches(
         config: Search configuration
 
     Returns:
-        Formatted results from all successful scrapes
+        Tuple of (formatted_results_string, cleaned_content_list, successful_urls_list)
     """
     try:
         # Load current session scrape count
@@ -858,7 +921,8 @@ async def process_scraping_in_batches(
         remaining_target = max(0, target_scrapes - existing_scrapes)
         if remaining_target == 0:
             logger.info(f"Session {session_id} has already reached target of {target_scrapes} scrapes")
-            return f"✅ **Target Already Reached**\n\nSession has already achieved {target_scrapes} successful scrapes."
+            msg = f"✅ **Target Already Reached**\n\nSession has already achieved {target_scrapes} successful scrapes."
+            return (msg, [], [])
 
         logger.info(f"Session {session_id} needs {remaining_target} more scrapes to reach target of {target_scrapes}")
 
@@ -867,7 +931,8 @@ async def process_scraping_in_batches(
         total_urls = len(urls_to_process)
 
         if not urls_to_process:
-            return "❌ **No URLs to Process**\n\nNo valid URLs found in search results."
+            msg = "❌ **No URLs to Process**\n\nNo valid URLs found in search results."
+            return (msg, [], [])
 
         logger.info(f"Starting iterative batch processing: {total_urls} URLs, target {remaining_target} scrapes")
 
@@ -959,17 +1024,18 @@ async def process_scraping_in_batches(
 
         # Apply content cleaning to all successful scrapes
         if all_crawled_content:
-            logger.info(f"Applying AI content cleaning to {len(all_crawled_content)} crawled articles")
+            logger.info(f"Applying AI content cleaning to {len(all_crawled_content)} crawled articles (parallel processing)")
             try:
                 from agents.content_cleaner_agent import get_content_cleaner
                 content_cleaner = get_content_cleaner()
 
-                cleaned_content = []
+                # Prepare content tuples for parallel batch processing
+                from agents.content_cleaner_agent import ContentCleaningContext
+                from urllib.parse import urlparse
+
+                content_tuples = []
                 for item in all_crawled_content:
                     # Create proper context for content cleaning
-                    from agents.content_cleaner_agent import ContentCleaningContext
-                    from urllib.parse import urlparse
-
                     parsed_url = urlparse(item['url'])
                     source_domain = parsed_url.netloc
 
@@ -981,13 +1047,21 @@ async def process_scraping_in_batches(
                         session_id=session_id
                     )
 
-                    cleaned_result = await content_cleaner.clean_content(
-                        raw_content=item['content'],
-                        context=cleaning_context
-                    )
+                    content_tuples.append((item['content'], cleaning_context))
+
+                # Use existing parallel content cleaning method - run ALL items concurrently
+                logger.info(f"Starting parallel content cleaning: {len(content_tuples)} items with max_concurrent={len(content_tuples)}")
+                cleaned_results = await content_cleaner.clean_multiple_contents(
+                    contents=content_tuples,
+                    max_concurrent=len(content_tuples)  # Clean all items concurrently
+                )
+
+                # Convert parallel results back to current format
+                cleaned_content = []
+                for i, cleaned_result in enumerate(cleaned_results):
                     if cleaned_result and cleaned_result.cleaned_content:
                         cleaned_content.append({
-                            **item,
+                            **all_crawled_content[i],
                             'cleaned_content': cleaned_result.cleaned_content,
                             'quality_score': cleaned_result.quality_score
                         })
@@ -999,12 +1073,19 @@ async def process_scraping_in_batches(
                 logger.warning(f"Content cleaning failed: {e}")
                 # Continue with raw content if cleaning fails
 
-        # Format final results
-        return format_iterative_scraping_results(all_crawled_content, batch_count, cumulative_scrapes, target_scrapes)
+        # Format final results and return structured data
+        formatted_results = format_iterative_scraping_results(all_crawled_content, batch_count, cumulative_scrapes, target_scrapes)
+
+        # Extract cleaned content and URLs for work product saving
+        cleaned_content = [item.get('cleaned_content', item.get('content', '')) for item in all_crawled_content]
+        successful_urls = [item['url'] for item in all_crawled_content]
+
+        return (formatted_results, cleaned_content, successful_urls)
 
     except Exception as e:
         logger.error(f"Iterative batch processing failed: {e}")
-        return f"❌ **Batch Processing Failed**\n\nError: {str(e)}"
+        error_msg = f"❌ **Batch Processing Failed**\n\nError: {str(e)}"
+        return (error_msg, [], [])
 
 
 def format_iterative_scraping_results(crawled_content: list, batch_count: int, total_scrapes: int, target_scrapes: int) -> str:
@@ -1296,10 +1377,10 @@ async def search_crawl_and_clean_direct(
                 )
                 cleaning_contexts.append((content, context))
 
-            # Clean content concurrently
+            # Clean content concurrently - run ALL items concurrently
             cleaning_results = await content_cleaner.clean_multiple_contents(
                 cleaning_contexts,
-                max_concurrent=min(5, len(crawled_content_list))
+                max_concurrent=len(crawled_content_list)  # Clean all items concurrently
             )
 
             # Filter and replace with cleaned content
@@ -1339,7 +1420,12 @@ async def search_crawl_and_clean_direct(
                 logger.error("All content failed quality filtering after AI cleaning")
                 return f"❌ **Content Quality Filter Failed**\n\nAll crawled content failed quality filtering after AI cleaning for query: '{query}'"
 
-            # Step 6: Save detailed work product to file
+            # Step 6: Save detailed work product to file (Work Product 1: SERP + scraped content)
+            logger.info(f"📋 Saving Work Product 1: SERP metadata + scraped content")
+            logger.info(f"   Session: {session_id}")
+            logger.info(f"   Search results: {len(search_results)}")
+            logger.info(f"   Crawled articles: {len(cleaned_content_list)}")
+
             work_product_path = save_work_product(
                 search_results=search_results,
                 crawled_content=cleaned_content_list,
@@ -1348,6 +1434,20 @@ async def search_crawl_and_clean_direct(
                 session_id=session_id,
                 workproduct_dir=workproduct_dir
             )
+
+            # VERIFY WORK (Critical SDK principle!)
+            import os
+            if work_product_path and os.path.exists(work_product_path):
+                file_size = os.path.getsize(work_product_path)
+                logger.info(f"✅ Work Product 1 VERIFIED: {work_product_path}")
+                logger.info(f"   File size: {file_size:,} bytes")
+                logger.info(f"   Contains: {len(search_results)} search results, {len(cleaned_content_list)} crawled articles")
+            else:
+                logger.error(f"❌ CRITICAL: Work Product 1 file NOT FOUND after save!")
+                logger.error(f"   Expected path: {work_product_path}")
+                logger.error(f"   Session ID: {session_id}")
+                logger.error(f"   Workproduct dir param: {workproduct_dir}")
+                # This is a critical failure - the primary work product is missing!
 
             # Step 7: Standardize research data for report generation integration
             try:

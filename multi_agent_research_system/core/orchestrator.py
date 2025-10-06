@@ -7,6 +7,7 @@ ClaudeSDKClient, agent definitions, and custom tools.
 import asyncio
 import json
 import os
+import traceback
 
 # Import from parent directory structure
 import sys
@@ -2129,17 +2130,23 @@ class ResearchOrchestrator:
                                         from_stage="report_generation",
                                         to_stage="editorial_review")
 
-            # Try traditional editorial review first
+            # Try traditional editorial review first - with loud failure reporting
             editorial_success = False
             try:
                 await self.stage_editorial_review(session_id)
                 editorial_success = True
                 self.logger.info(f"✅ Session {session_id}: Traditional editorial review completed successfully")
             except Exception as e:
-                self.logger.warning(f"⚠️ Session {session_id}: Traditional editorial review failed: {e}")
-                self.logger.info(f"🔄 Session {session_id}: Falling back to decoupled editorial review")
+                # LOUD FAILURE - Report the exact error and stack trace
+                self.logger.error(f"🚨 CRITICAL FAILURE: Traditional editorial review failed for session {session_id}")
+                self.logger.error(f"🚨 ERROR TYPE: {type(e).__name__}")
+                self.logger.error(f"🚨 ERROR MESSAGE: {e}")
+                self.logger.error(f"🚨 FULL STACK TRACE: {traceback.format_exc()}")
 
-                # Use decoupled editorial review as fallback
+                self.logger.warning(f"⚠️ Session {session_id}: Falling back to decoupled editorial review")
+                self.logger.error("🚨 NOTE: Fallback enabled but should be investigated - primary system should work")
+
+                # Use decoupled editorial review as fallback (now with loud failure reporting)
                 try:
                     decoupled_result = await self.stage_decoupled_editorial_review(session_id)
                     if decoupled_result.get("success", False):
@@ -2147,13 +2154,12 @@ class ResearchOrchestrator:
                         self.logger.info(f"✅ Session {session_id}: Decoupled editorial review completed successfully")
                         self.logger.info(f"   Content quality: {decoupled_result.get('content_quality', 'Unknown')}")
                         self.logger.info(f"   Enhancements made: {decoupled_result.get('enhancements_made', False)}")
+                        self.logger.warning("⚠️ FALLBACK SUCCEEDED: Primary editorial agent still needs fixing!")
                     else:
-                        self.logger.warning(f"⚠️ Session {session_id}: Decoupled editorial review had limited success")
+                        self.logger.error(f"❌ Session {session_id}: Even fallback decoupled editorial review failed")
                 except Exception as decoupled_error:
                     self.logger.error(f"❌ Session {session_id}: Both editorial approaches failed: {decoupled_error}")
-
-            if not editorial_success:
-                self.logger.error(f"❌ Session {session_id}: All editorial review attempts failed - continuing with minimal processing")
+                    self.logger.error("🚨 COMPLETE SYSTEM FAILURE: No editorial processing possible")
 
             # Complete Work Product 3: Editorial Review
             session_data = self.active_sessions[session_id]
@@ -2213,7 +2219,6 @@ class ResearchOrchestrator:
                                         error_message=str(e),
                                         stage="workflow_execution")
 
-            import traceback
             self.logger.error(traceback.format_exc())
             self.structured_logger.error("Workflow error traceback",
                                         traceback=traceback.format_exc(),
@@ -3098,14 +3103,12 @@ class ResearchOrchestrator:
 
                 EDITORIAL SEARCH CONTROLS:
                 **SUCCESS-BASED TERMINATION**: Continue searching until you achieve 5 successful scrapes total
-                **SEARCH LIMITS**: Maximum {editorial_remaining} editorial search attempts remaining
+                **SEARCH LIMITS**: Maximum {queries_remaining} editorial search attempts remaining
                 **WORK PRODUCT LABELING**: CRITICAL - Always use workproduct_prefix="editor research"
-                **BUDGET AWARENESS**: Track your search usage to stay within limits
 
-                CURRENT BUDGET STATUS:
-                - Search queries remaining: {editorial_remaining}/2
-                - Successful scrapes: {budget_status["editorial"]["successful_scrapes"]}
-                - Search limit reached: {budget_status["editorial"]["search_queries_reached_limit"]}
+                CURRENT STATUS:
+                - Search queries remaining: {queries_remaining}/2
+                - Target: 5 successful scrapes for editorial research
 
                 Use the Read tool to examine the generated report files AND all available research data, then provide comprehensive review:
 
@@ -3131,7 +3134,7 @@ class ResearchOrchestrator:
                 - STOP searching when you reach your search query limit or 5 successful scrapes
                 - Each successful scrape should provide meaningful content for gap-filling
 
-                If you identify research gaps and budget allows, conduct targeted searches following the guidelines above.
+                If you identify research gaps, conduct targeted searches following the guidelines above.
 
                 DELIVERABLE: Provide detailed feedback that includes SPECIFIC DATA RECOMMENDATIONS from the research materials.
                 Your feedback should tell the report agent exactly what facts, quotes, and statistics to integrate to enhance the report.

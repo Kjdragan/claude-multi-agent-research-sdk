@@ -12,7 +12,8 @@
       "Bash(timeout:*)",
       "Bash(env)",
       "Bash(tree:*)",
-      "Bash(mkdir:*)"
+      "Bash(mkdir:*)",
+      "Bash(python3:*)"
     ],
     "deny": [],
     "ask": []

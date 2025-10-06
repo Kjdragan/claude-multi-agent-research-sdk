@@ -650,18 +650,16 @@ async def _crawl_urls_with_retry(
     config = get_enhanced_search_config()
     url_tracker = get_url_tracker()
 
-    # Use z-playground1 implementation
-    from utils.crawl4ai_z_playground import crawl_multiple_urls_with_results
+    # Use the proven successful anti_bot_escalation implementation (same as zPlayground1)
+    from utils.anti_bot_escalation import get_escalation_manager
 
-    # Always use progressive retry for better parallelization
-    crawl_results = await crawl_multiple_urls_with_results(
+    # Use the same successful crawler implementation as zPlayground1
+    escalation_manager = get_escalation_manager()
+    crawl_results = await escalation_manager.crawl_multiple_with_escalation(
         urls=urls,
-        session_id=session_id,
-        max_concurrent=max_concurrent,
-        extraction_mode="article",
-        include_metadata=True,
-        use_progressive_retry=use_progressive_retry,
-        max_retries=3 if use_progressive_retry else 0
+        initial_level=1,  # Start with level 1 for follow-up searches
+        max_level=3,
+        max_concurrent=15
     )
 
     # Process results and record attempts

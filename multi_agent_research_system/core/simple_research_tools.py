@@ -49,7 +49,11 @@ except ImportError:
     "session_id": str
 })
 async def save_research_findings(args: dict[str, Any]) -> dict[str, Any]:
-    """Save research findings by returning data for external file creation."""
+    """Save research findings by returning data for external file creation.
+
+    NOTE: Work Product 1 (SERP metadata + scraped/cleaned results) is automatically
+    created by the zplayground1 search tool's save_work_product function.
+    This tool is for saving supplementary findings data."""
     if _logger:
         _logger.info(f"Preparing research findings for topic: {args.get('topic', 'Unknown')}")
 
@@ -168,7 +172,9 @@ async def create_research_report(args: dict[str, Any]) -> dict[str, Any]:
     base_prefix = base_prefix_map.get(report_type.lower(), "2")  # Default to 2- if unknown
 
     # Count existing files with this prefix to determine suffix (A, B, C, etc.)
-    session_dir = Path.cwd() / f"KEVIN/sessions/{session_id}/{subdir}"
+    # Use absolute path based on KEVIN_WORKPRODUCTS_DIR or hardcoded path
+    kevin_base = os.environ.get('KEVIN_WORKPRODUCTS_DIR', '/home/kjdragan/lrepos/claude-agent-sdk-python/KEVIN')
+    session_dir = Path(kevin_base) / "sessions" / session_id / subdir
     session_dir.mkdir(parents=True, exist_ok=True)
     existing_files = list(session_dir.glob(f"{base_prefix}*-*.{extension}"))
     if not existing_files:
@@ -181,13 +187,14 @@ async def create_research_report(args: dict[str, Any]) -> dict[str, Any]:
 
     filename = f"{prefix}-{sanitized_topic}_{timestamp}.{extension}"
     # Use absolute path to ensure agents save files to correct location
-    from pathlib import Path
-    recommended_filepath = str(Path.cwd() / f"KEVIN/sessions/{session_id}/{subdir}/{filename}")
+    recommended_filepath = str(session_dir / filename)
 
     # For final reports, also provide work_products path
     work_products_filepath = None
     if report_type.lower() == "final":
-        work_products_filepath = str(Path.cwd() / f"KEVIN/work_products/reports/{filename}")
+        work_products_dir = Path(kevin_base) / "work_products" / "reports"
+        work_products_dir.mkdir(parents=True, exist_ok=True)
+        work_products_filepath = str(work_products_dir / filename)
 
     if _logger:
         _logger.info(f"Research report formatted for {topic} ({len(report_content)} characters)")
@@ -204,7 +211,9 @@ The Write tool will automatically create any necessary directories."""
 
     # For final reports, also create an accessible copy in working directory as fallback
     if report_type.lower() == "final":
-        working_copy = str(Path.cwd() / f"KEVIN/sessions/{session_id}/working/{filename}")
+        working_dir = Path(kevin_base) / "sessions" / session_id / "working"
+        working_dir.mkdir(parents=True, exist_ok=True)
+        working_copy = str(working_dir / filename)
         instruction_text += f"""
 
 IMPORTANT: Also save a FINAL copy in working directory as fallback:
@@ -261,7 +270,32 @@ async def get_session_data(args: dict[str, Any]) -> dict[str, Any]:
     result_data = {}
 
     # Try to load research findings (new standardized format)
-    if data_type in ["all", "findings"]:
+    if data_type in ["all", "findings", "research_findings", "research_content", "summary"]:
+        # PRIORITY 1: Look for Work Product 1 (SERP metadata + scraped/cleaned content) in working/ directory
+        working_dir = session_path / "working"
+        if working_dir.exists():
+            # Find Work Product 1 files (1-*.md or 1A-*.md, etc.)
+            work_product_1_files = list(working_dir.glob("1*-*.md"))
+            # Exclude report files (those with "report" in the name)
+            work_product_1_files = [f for f in work_product_1_files if "report" not in f.name.lower()]
+
+            if work_product_1_files:
+                try:
+                    # Get the most recent Work Product 1 file
+                    latest_wp1 = max(work_product_1_files, key=os.path.getctime)
+                    with open(latest_wp1, encoding='utf-8') as f:
+                        wp1_content = f.read()
+                        result_data["work_product_1"] = wp1_content
+                        result_data["work_product_1_path"] = str(latest_wp1)
+                        result_data["work_product_1_name"] = latest_wp1.name
+
+                        # This is the primary research data that report_agent should use
+                        if _logger:
+                            _logger.info(f"✅ Found Work Product 1: {latest_wp1.name} ({len(wp1_content)} chars)")
+                except Exception as e:
+                    result_data["work_product_1_error"] = f"Error reading Work Product 1: {str(e)}"
+
+        # PRIORITY 2: Look for research_findings.json (supplementary metadata)
         findings_file = session_path / "research_findings.json"
         if findings_file.exists():
             try:
@@ -287,8 +321,9 @@ async def get_session_data(args: dict[str, Any]) -> dict[str, Any]:
             except (json.JSONDecodeError, Exception) as e:
                 # Handle corrupted research findings file
                 result_data["findings_error"] = f"Error reading research findings: {str(e)}"
-        else:
-            # Fallback: look for any research work products in the session directory
+
+        # PRIORITY 3: Fallback to old research/ directory structure (legacy)
+        if "work_product_1" not in result_data:
             research_dir = session_path / "research"
             if research_dir.exists():
                 research_files = list(research_dir.glob("*.md"))
@@ -337,6 +372,8 @@ async def get_session_data(args: dict[str, Any]) -> dict[str, Any]:
 
     # Create comprehensive status message
     status_items = []
+    if "work_product_1" in result_data:
+        status_items.append(f"Work Product 1 (SERP metadata + scraped content): {result_data['work_product_1_name']}")
     if "findings" in result_data:
         status_items.append("research findings")
     if "standardized_research" in result_data:
@@ -352,6 +389,8 @@ async def get_session_data(args: dict[str, Any]) -> dict[str, Any]:
 
     # Add error messages if any
     error_messages = []
+    if "work_product_1_error" in result_data:
+        error_messages.append(result_data["work_product_1_error"])
     if "findings_error" in result_data:
         error_messages.append(result_data["findings_error"])
     if "report_error" in result_data:
@@ -367,6 +406,10 @@ async def get_session_data(args: dict[str, Any]) -> dict[str, Any]:
     if error_messages:
         status_text += "\n\nWarnings:\n" + "\n".join(error_messages)
 
+    # Add Work Product 1 instruction for report_agent
+    if "work_product_1" in result_data:
+        status_text += f"\n\n📊 PRIMARY RESEARCH DATA: Work Product 1 contains SERP search results with metadata (titles, URLs, snippets, relevance scores) followed by scraped and AI-cleaned content from each source. This is the complete raw research data for report generation."
+
     return {
         "content": [{
             "type": "text",
@@ -374,6 +417,7 @@ async def get_session_data(args: dict[str, Any]) -> dict[str, Any]:
         }],
         "session_data": result_data,
         "data_availability": {
+            "has_work_product_1": "work_product_1" in result_data,
             "has_research_findings": "findings" in result_data,
             "has_structured_research": "standardized_research" in result_data,
             "has_fallback_research": "fallback_research_content" in result_data,

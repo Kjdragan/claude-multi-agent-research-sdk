@@ -149,8 +149,7 @@ class SimpleCrawler:
             # Multimedia exclusion - exclude images and media by default
             'exclude_all_images': True,          # Remove all images for faster loading
             'exclude_external_images': True,     # Block external domain images
-            'text_mode': True,                   # Enable text-focused mode
-            'light_mode': True,                  # Disable background features
+            'only_text': True,                   # Enable text-focused mode (correct parameter name)
 
             # Speed optimizations
             'wait_for_images': False,            # Don't wait for images to load
@@ -181,8 +180,7 @@ class SimpleCrawler:
                 **base_config,
                 simulate_user=True,
                 magic=True,
-                wait_until="domcontentloaded",
-                page_timeout=45000
+                wait_until="domcontentloaded"
             )
 
         else:
@@ -192,7 +190,6 @@ class SimpleCrawler:
                 simulate_user=True,
                 magic=True,
                 wait_until="domcontentloaded",
-                page_timeout=60000,
                 css_selector="main, article, .content, .article-body"
             )
 

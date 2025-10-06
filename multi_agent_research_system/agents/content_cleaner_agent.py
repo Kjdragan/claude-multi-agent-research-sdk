@@ -106,12 +106,12 @@ class ContentCleanerAgent:
     - Performance optimization
     """
 
-    def __init__(self, model_name: str = "gpt-4o-mini", api_key: str | None = None):
+    def __init__(self, model_name: str = "gpt-5-nano", api_key: str | None = None):
         """
         Initialize the content cleaner agent.
 
         Args:
-            model_name: OpenAI model to use (fallback to gpt-4o-mini if GPT-5-nano unavailable)
+            model_name: OpenAI model to use (gpt-5-nano is the standard cleaning model)
             api_key: OpenAI API key (defaults to OPENAI_API_KEY env var)
         """
         self.model_name = model_name

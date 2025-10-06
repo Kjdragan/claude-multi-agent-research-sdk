@@ -466,8 +466,9 @@ class DecoupledEditorialAgent:
         files_created = []
 
         try:
-            # Create session directory
-            session_dir = Path(self.workspace_dir) / "editorial_outputs" / session_id
+            # Create session directory within the proper session structure
+            base_sessions_dir = Path("/home/kjdragan/lrepos/claude-agent-sdk-python/KEVIN/sessions")
+            session_dir = base_sessions_dir / session_id / "editorial_outputs"
             session_dir.mkdir(parents=True, exist_ok=True)
 
             # Save final content
