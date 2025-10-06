@@ -1,0 +1,12 @@
+{
+  "processing_type": "minimal",
+  "reason": "insufficient_content",
+  "error": null,
+  "content_available": 0,
+  "minimal_output": true,
+  "recommendations": [
+    "Re-run research with broader parameters",
+    "Verify source accessibility",
+    "Consider alternative research approaches"
+  ]
+}

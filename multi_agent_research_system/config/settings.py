@@ -35,6 +35,20 @@ class EnhancedSearchConfig:
     url_deduplication_enabled: bool = True  # Prevent duplicate URL crawling
     progressive_retry_enabled: bool = True  # Retry failed URLs with higher anti-bot levels
 
+    # Adaptive batch sizing configuration
+    adaptive_batch_enabled: bool = True  # Enable adaptive batch sizing
+    initial_batch_size: int = 12  # Starting batch size for efficiency
+    max_batch_size: int = 15  # Upper limit for resource management
+    min_batch_size: int = 4  # Lower limit for parallelization benefits
+    success_rate_buffer: float = 0.25  # Add 25% buffer for expected failures
+    batch_reduction_threshold: int = 6  # Switch to smaller batches when close to target
+    max_total_results: int = 50  # Total URLs to consider from search merging
+
+    # Query expansion configuration
+    query_expansion_enabled: bool = False  # Enable LLM-powered query expansion
+    max_query_expansions: int = 2  # Number of additional queries to generate (total 3)
+    query_expansion_cache_enabled: bool = True  # Cache query expansions per session
+
     # Retry logic settings
     max_retry_attempts: int = 3
     progressive_timeout_multiplier: float = 1.5
@@ -110,6 +124,58 @@ class SettingsManager:
         if os.getenv('ENHANCED_SEARCH_MAX_CONCURRENT'):
             try:
                 self._enhanced_search_config.default_max_concurrent = int(os.getenv('ENHANCED_SEARCH_MAX_CONCURRENT'))
+            except ValueError:
+                pass
+
+        # Adaptive batch sizing settings
+        if os.getenv('ADAPTIVE_BATCH_ENABLED'):
+            self._enhanced_search_config.adaptive_batch_enabled = os.getenv('ADAPTIVE_BATCH_ENABLED').lower() in ('true', '1', 'yes')
+
+        if os.getenv('INITIAL_BATCH_SIZE'):
+            try:
+                self._enhanced_search_config.initial_batch_size = int(os.getenv('INITIAL_BATCH_SIZE'))
+            except ValueError:
+                pass
+
+        if os.getenv('MAX_BATCH_SIZE'):
+            try:
+                self._enhanced_search_config.max_batch_size = int(os.getenv('MAX_BATCH_SIZE'))
+            except ValueError:
+                pass
+
+        if os.getenv('MIN_BATCH_SIZE'):
+            try:
+                self._enhanced_search_config.min_batch_size = int(os.getenv('MIN_BATCH_SIZE'))
+            except ValueError:
+                pass
+
+        if os.getenv('SUCCESS_RATE_BUFFER'):
+            try:
+                buffer = float(os.getenv('SUCCESS_RATE_BUFFER'))
+                if 0.0 <= buffer <= 1.0:
+                    self._enhanced_search_config.success_rate_buffer = buffer
+            except ValueError:
+                pass
+
+        if os.getenv('BATCH_REDUCTION_THRESHOLD'):
+            try:
+                self._enhanced_search_config.batch_reduction_threshold = int(os.getenv('BATCH_REDUCTION_THRESHOLD'))
+            except ValueError:
+                pass
+
+        if os.getenv('MAX_TOTAL_RESULTS'):
+            try:
+                self._enhanced_search_config.max_total_results = int(os.getenv('MAX_TOTAL_RESULTS'))
+            except ValueError:
+                pass
+
+        # Query expansion settings
+        if os.getenv('QUERY_EXPANSION_ENABLED'):
+            self._enhanced_search_config.query_expansion_enabled = os.getenv('QUERY_EXPANSION_ENABLED').lower() in ('true', '1', 'yes')
+
+        if os.getenv('MAX_QUERY_EXPANSIONS'):
+            try:
+                self._enhanced_search_config.max_query_expansions = int(os.getenv('MAX_QUERY_EXPANSIONS'))
             except ValueError:
                 pass
 

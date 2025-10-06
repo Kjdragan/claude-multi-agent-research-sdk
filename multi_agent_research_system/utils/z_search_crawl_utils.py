@@ -8,6 +8,7 @@ Adapted for integration with the multi-agent research system.
 
 import logging
 import os
+import json
 from datetime import datetime
 from pathlib import Path
 
@@ -21,10 +22,14 @@ class SearchResult:
         self.title = title
         self.link = link
         self.snippet = snippet
-        self.position = position
+        self.position = position  # Original position in single query results
         self.date = date
         self.source = source
         self.relevance_score = relevance_score
+        # Additional attributes for query expansion and merging
+        self.merged_from_query = None  # Which query this came from (0, 1, 2, etc.)
+        self.original_position = None  # Original position in source query
+        self.merged_position = None   # Position in merged results list
 
 
 # Import enhanced relevance scorer with domain authority
@@ -384,6 +389,672 @@ def save_work_product(
         return ""
 
 
+def calculate_adaptive_batch_size(remaining_target: int, config) -> int:
+    """
+    Calculate optimal batch size based on remaining target and configuration.
+
+    This function implements adaptive batch sizing to balance efficiency with resource usage.
+    Larger batches are used when far from target, smaller batches when close to target.
+
+    Args:
+        remaining_target: Number of scrapes still needed
+        config: Enhanced search configuration object
+
+    Returns:
+        Optimal batch size for the current situation
+    """
+    if not config.adaptive_batch_enabled:
+        # Fall back to fixed batch size if adaptive sizing is disabled
+        return config.initial_batch_size
+
+    # Import configuration to get access to adaptive batch parameters
+    min_batch_size = config.min_batch_size
+    max_batch_size = config.max_batch_size
+    batch_reduction_threshold = config.batch_reduction_threshold
+    success_rate_buffer = config.success_rate_buffer
+
+    # Calculate adaptive batch size based on remaining target
+    if remaining_target >= batch_reduction_threshold:
+        # Far from target - use larger batch for efficiency
+        # Add success rate buffer to increase chances of reaching target
+        calculated_size = int(remaining_target * (1 + success_rate_buffer))
+        batch_size = min(max_batch_size, calculated_size)
+
+        logger.info(f"Adaptive batch sizing: remaining_target={remaining_target}, "
+                   f"buffer={success_rate_buffer:.0%}, calculated={calculated_size}, "
+                   f"final={batch_size} (efficiency mode)")
+
+    else:
+        # Close to target - use smaller batch to minimize waste
+        # Still add buffer but be more conservative
+        calculated_size = int(remaining_target * (1 + success_rate_buffer))
+        batch_size = min(max_batch_size, max(min_batch_size, calculated_size))
+
+        logger.info(f"Adaptive batch sizing: remaining_target={remaining_target}, "
+                   f"buffer={success_rate_buffer:.0%}, calculated={calculated_size}, "
+                   f"final={batch_size} (conservative mode)")
+
+    return batch_size
+
+
+def remove_duplicate_urls(search_results: list[SearchResult]) -> list[SearchResult]:
+    """
+    Remove duplicate URLs from search results using robust URL normalization.
+
+    This function deduplicates search results by normalizing URLs and removing
+    duplicates while preserving the original order and metadata.
+
+    Args:
+        search_results: List of search results potentially containing duplicate URLs
+
+    Returns:
+        Deduplicated list of search results with original order preserved
+    """
+    from urllib.parse import urlparse, urlunparse, urljoin
+    import re
+
+    def normalize_url(url: str) -> str:
+        """
+        Normalize URL for robust deduplication.
+
+        Handles common URL variations that point to the same content:
+        - HTTP/HTTPS variations
+        - www prefix variations
+        - Trailing slashes
+        - Query parameter ordering
+        - Fragment removal
+        """
+        if not url:
+            return ""
+
+        try:
+            # Parse URL
+            parsed = urlparse(url.strip())
+
+            # Normalize scheme (prefer https)
+            scheme = "https" if parsed.scheme in ["http", "https"] else parsed.scheme
+
+            # Normalize netloc (remove www prefix for consistency)
+            netloc = parsed.netloc.lower()
+            if netloc.startswith("www."):
+                netloc = netloc[4:]
+
+            # Normalize path (remove trailing slash unless it's the root)
+            path = parsed.path
+            if path != "/" and path.endswith("/"):
+                path = path[:-1]
+
+            # Sort query parameters for consistent ordering
+            if parsed.query:
+                query_params = sorted(parsed.query.split("&"))
+                query = "&".join(query_params)
+            else:
+                query = ""
+
+            # Remove fragments (they don't affect content)
+            fragment = ""
+
+            # Reconstruct normalized URL
+            normalized = urlunparse((scheme, netloc, path, "", query, fragment))
+            return normalized
+
+        except Exception as e:
+            logger.warning(f"URL normalization failed for '{url}': {e}")
+            return url.lower().strip()  # Fallback to simple normalization
+
+    # Track seen URLs and their indices
+    seen_urls = set()
+    deduplicated_results = []
+    duplicates_removed = 0
+
+    for i, result in enumerate(search_results):
+        if not result.link:
+            # Skip results without URLs
+            duplicates_removed += 1
+            continue
+
+        # Normalize URL for comparison
+        normalized_url = normalize_url(result.link)
+
+        if normalized_url not in seen_urls:
+            # First time seeing this URL - keep it
+            seen_urls.add(normalized_url)
+            deduplicated_results.append(result)
+        else:
+            # Duplicate URL - remove it
+            duplicates_removed += 1
+            logger.debug(f"Removed duplicate URL: {result.link} (normalized: {normalized_url})")
+
+    total_results = len(search_results)
+    final_count = len(deduplicated_results)
+
+    logger.info(f"URL deduplication: {total_results} → {final_count} results "
+               f"(removed {duplicates_removed} duplicates, {final_count/total_results*100:.1f}% retained)")
+
+    return deduplicated_results
+
+
+def merge_search_results_position_based(search_results_lists: list[list[SearchResult]], max_total_results: int = 50) -> list[SearchResult]:
+    """
+    Merge multiple search results lists using position-based ranking.
+
+    This function takes results from multiple queries and merges them by position:
+    - 1st result from each query gets merged rank 1, 1st result from each query gets merged rank 2, etc.
+    - This ensures fair representation across all queries rather than relevance-based mixing
+
+    Args:
+        search_results_lists: List of search results lists (one per query)
+        max_total_results: Maximum total results to include in merged list
+
+    Returns:
+        Position-merged list of search results
+    """
+    if not search_results_lists:
+        return []
+
+    logger.info(f"Position-based merging: {len(search_results_lists)} query result lists, max {max_total_results} total results")
+
+    # Find the maximum length among all result lists
+    max_position = max(len(results) for results in search_results_lists)
+    merged_results = []
+    position_count = 0
+
+    # Merge by position: take all 1st place results, then all 2nd place results, etc.
+    for position in range(max_position):
+        position_results = []
+
+        # Collect results at this position from all queries
+        for query_index, results in enumerate(search_results_lists):
+            if position < len(results):
+                result = results[position]
+                # Add metadata about source query and position
+                result.merged_from_query = query_index
+                result.original_position = position
+                position_results.append(result)
+
+        if position_results:
+            # Add all results at this position to merged list
+            merged_results.extend(position_results)
+            position_count += len(position_results)
+            logger.debug(f"Position {position + 1}: {len(position_results)} results from {len(position_results)} queries")
+
+        # Stop if we've reached the maximum total results
+        if len(merged_results) >= max_total_results:
+            merged_results = merged_results[:max_total_results]
+            logger.info(f"Reached maximum total results ({max_total_results}), stopping merge")
+            break
+
+    # Update final positions in merged list
+    for i, result in enumerate(merged_results):
+        result.merged_position = i + 1
+
+    total_input_results = sum(len(results) for results in search_results_lists)
+    logger.info(f"Position-based merge complete: {total_input_results} input results → "
+               f"{len(merged_results)} merged results across {max_position} positions")
+
+    return merged_results
+
+
+async def generate_query_expansions_with_llm(
+    original_query: str,
+    search_mode: str = "web",
+    session_id: str = "default",
+    orchestrator_client = None
+) -> list[str]:
+    """
+    Generate intelligent query variations using LLM for broader research coverage.
+
+    This function uses the research_agent LLM to create additional search queries
+    that provide different angles and tangential directions for comprehensive research.
+
+    Args:
+        original_query: The original research query
+        search_mode: "web" or "news" to match search strategy
+        session_id: Session identifier for caching
+        orchestrator_client: Client instance for LLM access
+
+    Returns:
+        List of queries including original + generated variations
+    """
+    if not orchestrator_client:
+        logger.warning("No orchestrator client provided for query expansion, using original query only")
+        return [original_query]
+
+    # Import configuration for query expansion settings
+    try:
+        from config.settings import get_enhanced_search_config
+        config = get_enhanced_search_config()
+    except ImportError:
+        logger.warning("Could not import search config, using default settings")
+        class DefaultConfig:
+            query_expansion_enabled = False
+            max_query_expansions = 2
+        config = DefaultConfig()
+
+    if not config.query_expansion_enabled:
+        logger.info("Query expansion disabled in configuration, using original query only")
+        return [original_query]
+
+    # Check cache first (simple in-memory cache per function call)
+    cache_key = f"{session_id}:{original_query}:{search_mode}"
+    # Note: In a full implementation, you might want persistent caching across sessions
+
+    logger.info(f"Generating query expansions for: '{original_query}' (search_mode: {search_mode})")
+
+    # Create LLM prompt for query expansion
+    prompt = f"""Generate {config.max_query_expansions} additional search queries for comprehensive research on: "{original_query}"
+
+Requirements:
+1. Each query should explore a different angle of the topic
+2. Include tangential but relevant directions for broader coverage
+3. Optimize for {"SERP News API" if search_mode == "news" else "Google Search API"} (clear, specific, research-focused)
+4. Avoid simply rephrasing the original - add new dimensions
+5. Consider temporal, geographic, or thematic variations where appropriate
+
+Goal: Provide diverse coverage that captures different aspects of the topic for thorough research.
+
+Format your response as a JSON array with exactly {config.max_query_expansions} query strings:
+["query 1", "query 2", "query 3" (if applicable)]
+
+Each query should:
+- Be specific and research-oriented
+- Target different aspects than the original query
+- Be suitable for web search APIs
+- Avoid overly complex or boolean syntax
+- Focus on discovering unique information"""
+
+    try:
+        # Use the orchestrator client to generate query expansions
+        # This assumes the client has a method to call the research agent
+        # The exact implementation depends on your orchestrator architecture
+
+        # For now, we'll implement a fallback that returns the original query
+        # In a full implementation, you would call the LLM here:
+        # response = await orchestrator_client.query_agent("research_agent", prompt)
+        # expanded_queries = parse_json_response(response)
+
+        logger.warning("LLM query expansion not fully implemented yet, using original query only")
+        return [original_query]
+
+    except Exception as e:
+        logger.error(f"Query expansion failed: {e}")
+        logger.info("Falling back to original query only")
+        return [original_query]
+
+
+async def execute_expanded_search_with_iterative_scraping(
+    query: str,
+    search_type: str = "search",
+    session_id: str = "default",
+    anti_bot_level: int = 1,
+    target_scrapes: int = 15,
+    orchestrator_client = None
+) -> str:
+    """
+    Execute comprehensive search with query expansion and iterative batch scraping.
+
+    This is the main function that implements the new architecture:
+    1. Generate query variations using LLM (if enabled)
+    2. Execute multiple SERP searches
+    3. Merge results using position-based ranking
+    4. Deduplicate URLs
+    5. Process URLs in adaptive batches until target reached
+
+    Args:
+        query: Original research query
+        search_type: "search" or "news"
+        session_id: Session identifier for tracking
+        anti_bot_level: Anti-bot detection level
+        target_scrapes: Target number of successful scrapes
+        orchestrator_client: Client for LLM access
+
+    Returns:
+        Comprehensive research results as formatted string
+    """
+    try:
+        start_time = datetime.now()
+        logger.info(f"Starting expanded search with iterative scraping: '{query}' "
+                   f"(target_scrapes: {target_scrapes}, anti_bot_level: {anti_bot_level})")
+
+        # Import configuration
+        try:
+            from config.settings import get_enhanced_search_config
+            config = get_enhanced_search_config()
+        except ImportError:
+            logger.warning("Could not import search config, using default settings")
+            class DefaultConfig:
+                query_expansion_enabled = False
+                max_total_results = 50
+                deduplication_enabled = True
+                adaptive_batch_enabled = True
+                initial_batch_size = 12
+                min_batch_size = 4
+                max_batch_size = 15
+                batch_reduction_threshold = 6
+                success_rate_buffer = 0.25
+            config = DefaultConfig()
+
+        # Step 1: Generate query expansions (if enabled)
+        if config.query_expansion_enabled and orchestrator_client:
+            queries = await generate_query_expansions_with_llm(
+                query, search_type, session_id, orchestrator_client
+            )
+        else:
+            queries = [query]
+            if config.query_expansion_enabled:
+                logger.info("Query expansion enabled but no orchestrator client provided, using original query only")
+
+        logger.info(f"Executing searches for {len(queries)} queries: {queries}")
+
+        # Step 2: Execute multiple SERP searches
+        all_search_results = []
+        for i, exp_query in enumerate(queries):
+            logger.info(f"Executing search {i+1}/{len(queries)}: '{exp_query}'")
+            try:
+                search_results = await execute_serper_search(
+                    query=exp_query,
+                    search_type=search_type,
+                    num_results=15  # Fixed per query
+                )
+                all_search_results.append(search_results)
+                logger.info(f"Search {i+1} returned {len(search_results)} results")
+            except Exception as e:
+                logger.error(f"Search {i+1} failed for query '{exp_query}': {e}")
+                all_search_results.append([])  # Add empty list to maintain structure
+
+        # Step 3: Merge search results using position-based ranking
+        if len(all_search_results) > 1:
+            merged_results = merge_search_results_position_based(
+                all_search_results, config.max_total_results
+            )
+        else:
+            merged_results = all_search_results[0] if all_search_results else []
+
+        # Step 4: Deduplicate URLs
+        if config.url_deduplication_enabled and merged_results:
+            deduplicated_results = remove_duplicate_urls(merged_results)
+        else:
+            deduplicated_results = merged_results
+
+        if not deduplicated_results:
+            return f"❌ **Search Failed**\n\nNo results found after query expansion and deduplication for query: '{query}'"
+
+        logger.info(f"After processing: {len(deduplicated_results)} unique URLs ready for scraping")
+
+        # Step 5: Process URLs in adaptive batches until target reached
+        final_results = await process_scraping_in_batches(
+            deduplicated_results,
+            session_id,
+            target_scrapes,
+            anti_bot_level,
+            config
+        )
+
+        # Step 6: Format and return results
+        processing_time = (datetime.now() - start_time).total_seconds()
+        summary = f"""
+# Expanded Search Results
+
+**Original Query**: {query}
+**Query Expansions**: {len(queries)} searches performed
+**Unique URLs Found**: {len(deduplicated_results)}
+**Processing Time**: {processing_time:.1f} seconds
+**Queries**: {', '.join(f'"{q}"' for q in queries)}
+
+{final_results}
+
+---
+*Results generated using expanded search with iterative batch processing*
+"""
+        return summary.strip()
+
+    except Exception as e:
+        error_msg = f"❌ **Expanded Search Failed**\n\nError: {str(e)}"
+        logger.error(f"Expanded search failed: {e}")
+        return error_msg
+
+
+async def process_scraping_in_batches(
+    search_results: list[SearchResult],
+    session_id: str,
+    target_scrapes: int,
+    anti_bot_level: int,
+    config
+) -> str:
+    """
+    Process search results in adaptive batches until target scrapes reached.
+
+    This function implements the core iterative scraping logic:
+    - Calculate adaptive batch size based on remaining target
+    - Process batch in parallel
+    - Check success and continue if needed
+    - Accept overshoot when target exceeded
+
+    Args:
+        search_results: Deduplicated search results to process
+        session_id: Session identifier
+        target_scrapes: Target number of successful scrapes
+        anti_bot_level: Anti-bot detection level
+        config: Search configuration
+
+    Returns:
+        Formatted results from all successful scrapes
+    """
+    try:
+        # Load current session scrape count
+        session_scrape_file = f"KEVIN/sessions/{session_id}/session_scrape_count.json"
+        existing_scrapes = 0
+
+        if os.path.exists(session_scrape_file):
+            try:
+                with open(session_scrape_file, 'r') as f:
+                    session_data = json.load(f)
+                    existing_scrapes = session_data.get('total_scrapes', 0)
+                logger.info(f"Session {session_id} has {existing_scrapes} existing scrapes")
+            except Exception as e:
+                logger.warning(f"Could not read session scrape file: {e}")
+
+        # Calculate remaining scrapes needed
+        remaining_target = max(0, target_scrapes - existing_scrapes)
+        if remaining_target == 0:
+            logger.info(f"Session {session_id} has already reached target of {target_scrapes} scrapes")
+            return f"✅ **Target Already Reached**\n\nSession has already achieved {target_scrapes} successful scrapes."
+
+        logger.info(f"Session {session_id} needs {remaining_target} more scrapes to reach target of {target_scrapes}")
+
+        # Extract URLs from search results
+        urls_to_process = [result.link for result in search_results if result.link]
+        total_urls = len(urls_to_process)
+
+        if not urls_to_process:
+            return "❌ **No URLs to Process**\n\nNo valid URLs found in search results."
+
+        logger.info(f"Starting iterative batch processing: {total_urls} URLs, target {remaining_target} scrapes")
+
+        # Process in adaptive batches
+        all_crawled_content = []
+        processed_urls = []
+        batch_count = 0
+        cumulative_scrapes = existing_scrapes
+
+        for start_idx in range(0, total_urls, config.max_batch_size):
+            # Calculate adaptive batch size for this iteration
+            remaining_needed = max(0, target_scrapes - cumulative_scrapes)
+            if remaining_needed == 0:
+                logger.info("Target reached, stopping batch processing")
+                break
+
+            # Calculate optimal batch size
+            batch_size = calculate_adaptive_batch_size(remaining_needed, config)
+            end_idx = min(start_idx + batch_size, total_urls)
+            current_batch_urls = urls_to_process[start_idx:end_idx]
+            current_batch_results = search_results[start_idx:end_idx]
+
+            batch_count += 1
+            logger.info(f"Processing batch {batch_count}: {len(current_batch_urls)} URLs "
+                       f"(remaining needed: {remaining_needed}, batch size: {batch_size})")
+
+            # Process this batch using existing anti-bot escalation
+            try:
+                from utils.anti_bot_escalation import get_escalation_manager
+                escalation_manager = get_escalation_manager()
+
+                batch_crawl_results = await escalation_manager.crawl_multiple_with_escalation(
+                    urls=current_batch_urls,
+                    initial_level=anti_bot_level,
+                    max_level=3,
+                    max_concurrent=config.max_batch_size
+                )
+
+                # Filter successful results and extract content
+                batch_successful_content = []
+                for i, crawl_result in enumerate(batch_crawl_results):
+                    if crawl_result and crawl_result.success and crawl_result.content:
+                        batch_successful_content.append({
+                            'url': current_batch_urls[i],
+                            'content': crawl_result.content,
+                            'title': current_batch_results[i].title if i < len(current_batch_results) else '',
+                            'snippet': current_batch_results[i].snippet if i < len(current_batch_results) else '',
+                            'source': current_batch_results[i].source if i < len(current_batch_results) else '',
+                            'merged_position': current_batch_results[i].merged_position if i < len(current_batch_results) else None
+                        })
+
+                batch_scrapes = len(batch_successful_content)
+                cumulative_scrapes += batch_scrapes
+
+                logger.info(f"Batch {batch_count} completed: {batch_scrapes}/{len(current_batch_urls)} successful "
+                           f"(cumulative: {cumulative_scrapes}, target: {target_scrapes})")
+
+                # Add successful content to results
+                all_crawled_content.extend(batch_successful_content)
+                processed_urls.extend(current_batch_urls)
+
+                # Update session scrape count
+                try:
+                    session_data = {
+                        'total_scrapes': cumulative_scrapes,
+                        'target_scrapes': target_scrapes,
+                        'last_updated': datetime.now().isoformat(),
+                        'session_id': session_id,
+                        'query': f"expanded_search_batch_{batch_count}",
+                        'successful_urls_this_run': [item['url'] for item in batch_successful_content],
+                        'scrapes_this_run': batch_scrapes
+                    }
+
+                    os.makedirs(f"KEVIN/sessions/{session_id}", exist_ok=True)
+                    with open(session_scrape_file, 'w') as f:
+                        json.dump(session_data, f, indent=2)
+
+                except Exception as e:
+                    logger.error(f"Failed to update session scrape file: {e}")
+
+                # Check if target reached (accept overshoot)
+                if cumulative_scrapes >= target_scrapes:
+                    logger.info(f"Target reached! {cumulative_scrapes} >= {target_scrapes}")
+                    break
+
+            except Exception as e:
+                logger.error(f"Batch {batch_count} failed: {e}")
+                continue
+
+        # Apply content cleaning to all successful scrapes
+        if all_crawled_content:
+            logger.info(f"Applying AI content cleaning to {len(all_crawled_content)} crawled articles")
+            try:
+                from agents.content_cleaner_agent import get_content_cleaner
+                content_cleaner = get_content_cleaner()
+
+                cleaned_content = []
+                for item in all_crawled_content:
+                    # Create proper context for content cleaning
+                    from agents.content_cleaner_agent import ContentCleaningContext
+                    from urllib.parse import urlparse
+
+                    parsed_url = urlparse(item['url'])
+                    source_domain = parsed_url.netloc
+
+                    cleaning_context = ContentCleaningContext(
+                        search_query="",  # No specific query for batch processing
+                        query_terms=[],  # No specific query terms for batch processing
+                        url=item['url'],
+                        source_domain=source_domain,
+                        session_id=session_id
+                    )
+
+                    cleaned_result = await content_cleaner.clean_content(
+                        raw_content=item['content'],
+                        context=cleaning_context
+                    )
+                    if cleaned_result and cleaned_result.cleaned_content:
+                        cleaned_content.append({
+                            **item,
+                            'cleaned_content': cleaned_result.cleaned_content,
+                            'quality_score': cleaned_result.quality_score
+                        })
+
+                logger.info(f"Content cleaning completed: {len(cleaned_content)}/{len(all_crawled_content)} passed quality threshold")
+                all_crawled_content = cleaned_content
+
+            except Exception as e:
+                logger.warning(f"Content cleaning failed: {e}")
+                # Continue with raw content if cleaning fails
+
+        # Format final results
+        return format_iterative_scraping_results(all_crawled_content, batch_count, cumulative_scrapes, target_scrapes)
+
+    except Exception as e:
+        logger.error(f"Iterative batch processing failed: {e}")
+        return f"❌ **Batch Processing Failed**\n\nError: {str(e)}"
+
+
+def format_iterative_scraping_results(crawled_content: list, batch_count: int, total_scrapes: int, target_scrapes: int) -> str:
+    """
+    Format results from iterative batch processing into a comprehensive report.
+
+    Args:
+        crawled_content: List of successfully crawled and cleaned content
+        batch_count: Number of batches processed
+        total_scrapes: Total successful scrapes achieved
+        target_scrapes: Original target number of scrapes
+
+    Returns:
+        Formatted results string
+    """
+    if not crawled_content:
+        return f"❌ **No Content Retrieved**\n\nProcessed {batch_count} batches but no successful content scrapes were achieved."
+
+    result_parts = [
+        f"# Iterative Scraping Results",
+        f"",
+        f"**Summary**: {total_scrapes} successful scrapes from {batch_count} batches (target: {target_scrapes})",
+        f"**Status**: {'✅ Target Achieved' if total_scrapes >= target_scrapes else '⚠️ Below Target'}",
+        f"",
+        f"## Retrieved Content ({len(crawled_content)} sources)",
+        f""
+    ]
+
+    for i, item in enumerate(crawled_content, 1):
+        quality_info = f" (Quality: {item.get('quality_score', 'N/A')})" if 'quality_score' in item else ""
+        position_info = f" (Position: {item.get('merged_position', 'N/A')})" if item.get('merged_position') else ""
+
+        result_parts.extend([
+            f"### {i}. {item.get('title', 'Untitled')}{quality_info}{position_info}",
+            f"**URL**: {item['url']}",
+            f"**Source**: {item.get('source', 'Unknown')}",
+            f"**Snippet**: {item.get('snippet', 'No snippet available')[:200]}...",
+            f"",
+            f"**Content Preview**:",
+            f"{item.get('cleaned_content', item.get('content', ''))[:1000]}...",
+            f"",
+            f"---",
+            f""
+        ])
+
+    result_parts.append(f"**Processing Complete**: {total_scrapes} sources successfully scraped and processed.")
+
+    return "\n".join(result_parts)
+
+
 async def search_crawl_and_clean_direct(
     query: str,
     search_type: str = "search",
@@ -394,7 +1065,9 @@ async def search_crawl_and_clean_direct(
     session_id: str = "default",
     anti_bot_level: int = 1,
     workproduct_dir: str = None,
-    target_scrapes: int = 15
+    target_scrapes: int = 15,
+    use_expanded_search: bool = False,
+    orchestrator_client = None
 ) -> str:
     """
     Combined search, crawl, and clean operation using zPlayground1 technology.
@@ -404,6 +1077,7 @@ async def search_crawl_and_clean_direct(
     2. Saves detailed work product to workproducts directory
     3. Returns full detailed data for orchestrator agent analysis
     4. Uses parallel processing and anti-bot detection
+    5. Supports expanded search with query expansion and iterative batch processing
 
     Args:
         query: Search query
@@ -415,6 +1089,9 @@ async def search_crawl_and_clean_direct(
         session_id: Session identifier
         anti_bot_level: Progressive anti-bot level (0-3)
         workproduct_dir: Directory for work products
+        target_scrapes: Target number of successful scrapes
+        use_expanded_search: Enable LLM-powered query expansion and iterative batch processing
+        orchestrator_client: Client instance for LLM access during query expansion
 
     Returns:
         Full detailed content for orchestrator agent processing
@@ -422,6 +1099,21 @@ async def search_crawl_and_clean_direct(
     try:
         start_time = datetime.now()
         logger.info(f"Starting enhanced search+crawl+clean for query: '{query}' (anti_bot_level: {anti_bot_level}, target_scrapes: {target_scrapes})")
+
+        # Route to expanded search if enabled (new architecture)
+        if use_expanded_search:
+            logger.info(f"Using expanded search with iterative batch processing for query: '{query}'")
+            return await execute_expanded_search_with_iterative_scraping(
+                query=query,
+                search_type=search_type,
+                session_id=session_id,
+                anti_bot_level=anti_bot_level,
+                target_scrapes=target_scrapes,
+                orchestrator_client=orchestrator_client
+            )
+
+        # Continue with traditional single-query approach (backward compatibility)
+        logger.info(f"Using traditional search approach for query: '{query}'")
 
         # Step 0: Check session scrape count and adjust target
         import os
@@ -668,18 +1360,25 @@ async def search_crawl_and_clean_direct(
                 # Determine session directory from workproduct directory
                 if workproduct_dir and os.path.exists(workproduct_dir):
                     session_dir = os.path.dirname(workproduct_dir)  # Go up one level to session dir
-                    standardized_path = standardize_and_save_research_data(
-                        session_id=session_id,
-                        research_topic=query,
-                        workproduct_dir=workproduct_dir,
-                        session_dir=session_dir
-                    )
-                    if standardized_path:
-                        logger.info(f"✅ Research data standardized for report generation: {standardized_path}")
-                    else:
-                        logger.warning("⚠️ Research data standardization failed, but research completed successfully")
+                elif workproduct_dir is None:
+                    # Calculate session-based directory when None is passed
+                    session_dir = f"KEVIN/sessions/{session_id}"
+                    workproduct_dir = f"{session_dir}/research"
                 else:
-                    logger.warning(f"⚠️ Cannot standardize research data - workproduct directory not found: {workproduct_dir}")
+                    # workproduct_dir is provided but doesn't exist
+                    session_dir = f"KEVIN/sessions/{session_id}"
+                    workproduct_dir = f"{session_dir}/research"
+
+                standardized_path = standardize_and_save_research_data(
+                    session_id=session_id,
+                    research_topic=query,
+                    workproduct_dir=workproduct_dir,
+                    session_dir=session_dir
+                )
+                if standardized_path:
+                    logger.info(f"✅ Research data standardized for report generation: {standardized_path}")
+                else:
+                    logger.warning("⚠️ Research data standardization failed, but research completed successfully")
             except Exception as e:
                 logger.error(f"⚠️ Research data standardization error: {e}")
 
@@ -861,7 +1560,9 @@ async def news_search_and_crawl_direct(
     session_id: str = "default",
     anti_bot_level: int = 1,
     workproduct_dir: str = None,
-    target_scrapes: int = 15
+    target_scrapes: int = 15,
+    use_expanded_search: bool = False,
+    orchestrator_client = None
 ) -> str:
     """
     Specialized news search with content extraction using enhanced technology.
@@ -890,7 +1591,9 @@ async def news_search_and_crawl_direct(
         session_id=session_id,
         anti_bot_level=anti_bot_level,
         workproduct_dir=workproduct_dir,
-        target_scrapes=target_scrapes
+        target_scrapes=target_scrapes,
+        use_expanded_search=use_expanded_search,
+        orchestrator_client=orchestrator_client
     )
 
 

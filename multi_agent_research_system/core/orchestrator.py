@@ -1733,7 +1733,7 @@ class ResearchOrchestrator:
                 1. Execute mcp__research_tools__serp_search with:
                    - query: "{topic}"
                    - num_results: 15
-                   - auto_crawl_top: 8
+                   - auto_crawl_top: 12  # Updated for adaptive batch sizing
                    - crawl_threshold: 0.3
                    - session_id: "{session_id}"
 

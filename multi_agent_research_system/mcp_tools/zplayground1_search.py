@@ -114,6 +114,11 @@ def create_zplayground1_mcp_server():
                 "minimum": 1,
                 "maximum": 50,
                 "description": "Target number of successful content extractions - tool will automatically stop when reached"
+            },
+            "use_expanded_search": {
+                "type": "boolean",
+                "default": False,
+                "description": "Enable LLM-powered query expansion for broader research coverage (generates 2 additional queries for 3 total searches)"
             }
         }
     )
@@ -122,13 +127,17 @@ def create_zplayground1_mcp_server():
         Complete zPlayground1 search, scrape, and clean functionality.
 
         This single tool performs the entire zPlayground1 workflow:
-        1. Executes Google search or SERP news search based on search_mode
-        2. Selects relevant URLs using exact zPlayground1 relevance scoring
-        3. Crawls multiple URLs in parallel using exact zPlayground1 SimpleCrawler
-        4. Applies progressive anti-bot detection (levels 0-3)
-        5. Uses AI content cleaning (GPT-5-nano) via Pydantic AI
-        6. Returns cleaned results within token limits
-        7. Saves detailed work products for reference
+        1. Optionally generates LLM-powered query expansions for broader coverage (if use_expanded_search=True)
+        2. Executes Google search or SERP news search based on search_mode
+        3. Selects relevant URLs using exact zPlayground1 relevance scoring
+        4. Applies position-based merging for multiple query results (if expanded search enabled)
+        5. Removes duplicate URLs using robust normalization
+        6. Crawls multiple URLs in parallel using exact zPlayground1 SimpleCrawler
+        7. Applies progressive anti-bot detection (levels 0-3)
+        8. Uses adaptive batch sizing to minimize wasted scraping while achieving targets
+        9. Uses AI content cleaning (GPT-5-nano) via Pydantic AI
+        10. Returns cleaned results within token limits
+        11. Saves detailed work products for reference
 
         NO FALLBACKS - Uses exact zPlayground1 implementation that works effectively.
         If it fails, it fails loudly so we know to fix it properly.
@@ -192,6 +201,10 @@ def create_zplayground1_mcp_server():
                 if not (1 <= target_scrapes <= 50):
                     raise ValueError(f"Invalid target_scrapes '{target_scrapes}'. Must be between 1 and 50")
 
+                use_expanded_search = args.get("use_expanded_search", False)
+                if isinstance(use_expanded_search, str):
+                    use_expanded_search = use_expanded_search.lower() in ('true', '1', 'yes')
+
                 session_id = args.get("session_id", "default")
                 workproduct_prefix = args.get("workproduct_prefix", "")
 
@@ -224,7 +237,9 @@ def create_zplayground1_mcp_server():
                     session_id=session_id,
                     anti_bot_level=anti_bot_level,
                     workproduct_dir=None,  # Let function use session-based structure
-                    target_scrapes=target_scrapes
+                    target_scrapes=target_scrapes,
+                    use_expanded_search=use_expanded_search,
+                    orchestrator_client=None  # MCP tool doesn't have access to orchestrator client
                 )
             else:
                 # Use web search and crawl
@@ -238,7 +253,9 @@ def create_zplayground1_mcp_server():
                     session_id=session_id,
                     anti_bot_level=anti_bot_level,
                     workproduct_dir=None,  # Let function use session-based structure
-                    target_scrapes=target_scrapes
+                    target_scrapes=target_scrapes,
+                    use_expanded_search=use_expanded_search,
+                    orchestrator_client=None  # MCP tool doesn't have access to orchestrator client
                 )
 
             # Apply MCP compliance with multi-level content allocation
