@@ -703,6 +703,42 @@ async def create_research_report(args: dict[str, Any]) -> dict[str, Any]:
         if _logger:
             _logger.info(f"Successfully created research report: {filepath}")
 
+        # Work Product 2 verification logging - verify file was created successfully
+        try:
+            if filepath.exists():
+                file_size = filepath.stat().st_size
+                if _logger:
+                    _logger.info(f"✅ Work Product 2 VERIFICATION: Report file verified - {filepath.name} ({file_size:,} bytes)")
+
+                # Additional verification for Work Product 2 reports
+                work_product_number = base_prefix  # Extract work product number (e.g., "2")
+                if work_product_number == "2":
+                    if _logger:
+                        _logger.info(f"✅ Work Product 2 CONFIRMED: Report successfully saved to working directory")
+                        _logger.info(f"📄 Work Product 2 DETAILS: Type={report_type}, Session={session_id}, Size={file_size:,} bytes")
+                        _logger.info(f"📍 Work Product 2 PATH: {filepath.absolute()}")
+
+                    # Verify file content is not empty
+                    if file_size > 0:
+                        with open(filepath, 'r', encoding='utf-8') as verify_f:
+                            content_preview = verify_f.read(200)
+                            if len(content_preview.strip()) > 50:  # Ensure substantial content
+                                if _logger:
+                                    _logger.info(f"✅ Work Product 2 CONTENT VERIFIED: Substantial report content detected")
+                                    _logger.info(f"📝 Content preview: {content_preview[:100]}...")
+                            else:
+                                if _logger:
+                                    _logger.warning(f"⚠️ Work Product 2 CONTENT WARNING: Report content appears minimal")
+                    else:
+                        if _logger:
+                            _logger.error(f"❌ Work Product 2 ERROR: Report file is empty")
+            else:
+                if _logger:
+                    _logger.error(f"❌ Work Product 2 VERIFICATION FAILED: Report file not found after save - {filepath}")
+        except Exception as verify_error:
+            if _logger:
+                _logger.error(f"❌ Work Product 2 VERIFICATION ERROR: Failed to verify saved file: {verify_error}")
+
         return {
             "success": True,
             "report_content": formatted_content,

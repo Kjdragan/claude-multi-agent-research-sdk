@@ -165,7 +165,7 @@ MANDATORY REPORT GENERATION PROCESS:
 12. WORK PRODUCT NUMBERING SYSTEM v2.0: Files are automatically organized as:
     - Work Product 1: /sessions/{session_id}/research/1-*_workproduct.md
     - Work Product 1B: /sessions/{session_id}/research/1B-*_workproduct.md
-    - Work Product 2: /sessions/{session_id}/working/2-*-report.md
+    - Work Product 2: /sessions/{session_id}/working/2-*.md
     - Work Product 3: /sessions/{session_id}/working/3-*-review.md
     - Work Product 4: /sessions/{session_id}/final/4-*-final.md
 
@@ -332,7 +332,10 @@ EDITORIAL EXECUTION SEQUENCE:
    - Direct quotes and specific findings from sources
    - Improved citations and source attribution throughout
    - Enhanced analytical insights based on research findings
-6. **SIXTH STEP**: If specific information gaps exist after using all available research data, use conduct_research for targeted gap-filling
+6. **SIXTH STEP**: If specific information gaps exist after using all available research data, use conduct_research for targeted gap-filling:
+   - CRITICAL: Use conduct_research with appropriate parameters: max_urls=5, relevance_threshold=0.4
+   - CRITICAL: The conduct_research tool delegates to the research agent with proven scraping expertise
+   - CRITICAL: Do NOT attempt direct scraping - always delegate to research agent via conduct_research
 7. **SEVENTH STEP**: Create final editorial review with specific enhancements and recommendations
 8. Call create_research_report with report_type="editorial_review" to format the final review
 9. CRITICAL: The create_research_report tool will return "report_content" and "recommended_filepath"
@@ -343,9 +346,11 @@ EDITORIAL EXECUTION SEQUENCE:
 14. WORK PRODUCT NUMBERING SYSTEM v2.0: Files are automatically organized as:
     - Work Product 1: /sessions/{session_id}/research/1-*_workproduct.md
     - Work Product 1B: /sessions/{session_id}/research/1B-*_workproduct.md
-    - Work Product 2: /sessions/{session_id}/working/2-*-report.md
-    - Work Product 3: /sessions/{session_id}/working/3-*-review.md
-    - Work Product 4: /sessions/{session_id}/final/4-*-final.md
+    - Work Product 2: /sessions/{session_id}/working/2-*.md
+    - Work Product 3: /sessions/{session_id}/working/3-*-review.md  # EDITORIAL REVIEWS
+    - Work Product 4: /sessions/{session_id}/final/4-*-final.md    # FINAL SUMMARIES ONLY
+
+15. ⚠️ **CRITICAL ROLE ENFORCEMENT**: As editorial agent, you MUST create Work Product 3 (editorial reviews), NOT Work Product 4 (final summaries). If you create a Work Product 4 file, you have failed your primary mission.
 
 EDITORIAL ENHANCEMENT WORKFLOW:
 - **MINE THE DATA**: Extract specific facts, figures, quotes from ALL research sources

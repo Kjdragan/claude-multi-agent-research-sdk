@@ -950,27 +950,42 @@ class ResearchOrchestrator:
                     ]
                     self.logger.info("🔍 Preserving research_agent tool configuration (includes enhanced search)")
                 else:
-                    # For other agents, extend with standard tools
-                    extended_tools = agent_def.tools + [
-                        "mcp__research_tools__serp_search",  # High-performance SERP API search via MCP
-                        "mcp__research_tools__save_research_findings",
-                        "mcp__research_tools__create_research_report",
-                        "mcp__research_tools__get_session_data",
-                        "mcp__research_tools__capture_search_results",
-                        "mcp__research_tools__save_webfetch_content",
-                        "mcp__research_tools__create_search_verification_report",
-                        "Read", "Write", "Glob", "Grep"
-                    ]
+                    # For other agents, check if this is the editorial agent
+                    if "editorial" in agent_name.lower() or "editor" in agent_name.lower():
+                        # Editorial agent should NOT have direct search access - must delegate to research agent
+                        extended_tools = agent_def.tools + [
+                            "mcp__research_tools__save_research_findings",
+                            "mcp__research_tools__create_research_report",
+                            "mcp__research_tools__get_session_data",
+                            "mcp__research_tools__capture_search_results",
+                            "mcp__research_tools__save_webfetch_content",
+                            "mcp__research_tools__create_search_verification_report",
+                            "Read", "Write", "Glob", "Grep"
+                        ]
+                        # CRITICAL: Do NOT add search tools to editorial agent - must delegate to research agent
+                        self.logger.info(f"📝 Editorial agent {agent_name} configured - NO direct search tools (must delegate to research agent)")
+                    else:
+                        # For other non-editorial agents, extend with standard tools including search
+                        extended_tools = agent_def.tools + [
+                            "mcp__research_tools__serp_search",  # High-performance SERP API search via MCP
+                            "mcp__research_tools__save_research_findings",
+                            "mcp__research_tools__create_research_report",
+                            "mcp__research_tools__get_session_data",
+                            "mcp__research_tools__capture_search_results",
+                            "mcp__research_tools__save_webfetch_content",
+                            "mcp__research_tools__create_search_verification_report",
+                            "Read", "Write", "Glob", "Grep"
+                        ]
 
-                # Add zPlayground1 search tool if available
-                if zplayground1_server is not None:
-                    zplayground1_tools = [
-                        "mcp__zplayground1_search__zplayground1_search_scrape_clean"  # Single comprehensive tool
-                    ]
-                    extended_tools.extend(zplayground1_tools)
-                    self.logger.info(f"✅ zPlayground1 search tool added to {agent_name}")
-                else:
-                    self.logger.warning(f"⚠️ zPlayground1 search tool not available for {agent_name}")
+                        # Add zPlayground1 search tool if available (for non-editorial agents)
+                        if zplayground1_server is not None:
+                            zplayground1_tools = [
+                                "mcp__zplayground1_search__zplayground1_search_scrape_clean"  # Single comprehensive tool
+                            ]
+                            extended_tools.extend(zplayground1_tools)
+                            self.logger.info(f"✅ zPlayground1 search tool added to {agent_name}")
+                        else:
+                            self.logger.warning(f"⚠️ zPlayground1 search tool not available for {agent_name}")
 
                 agents_config[agent_name] = AgentDefinition(
                     description=agent_def.description,
@@ -2755,6 +2770,53 @@ class ResearchOrchestrator:
                     if isinstance(message, ResultMessage):
                         self.logger.info(f"{agent_name} received ResultMessage - collection complete")
                         self.logger.info(f"Total messages: {len(query_result['messages_collected'])}, Tools: {len(query_result['tool_executions'])}, Substantive responses: {query_result['substantive_responses']}")
+
+                        # Detailed agent message logging for debugging
+                        if self.logger.isEnabledFor(logging.DEBUG):
+                            self.logger.debug(f"📝 DETAILED MESSAGE ANALYSIS for {agent_name}:")
+                            self.logger.debug(f"   Total raw messages collected: {len(query_result['messages_collected'])}")
+
+                            # Analyze message types and content
+                            message_summary = {"text_messages": 0, "tool_calls": 0, "result_messages": 0, "empty_messages": 0}
+                            for i, msg_info in enumerate(query_result['messages_collected']):
+                                msg_type = msg_info.get("type", "unknown")
+                                content_texts = msg_info.get("content_texts", [])
+                                tool_calls = msg_info.get("tool_calls", [])
+
+                                if msg_type == "AssistantMessage":
+                                    if tool_calls:
+                                        message_summary["tool_calls"] += 1
+                                        self.logger.debug(f"   Message {i+1}: {msg_type} with {len(tool_calls)} tool calls: {[tc.get('name', 'unknown') for tc in tool_calls]}")
+                                    elif content_texts:
+                                        message_summary["text_messages"] += 1
+                                        self.logger.debug(f"   Message {i+1}: {msg_type} with text content ({len(content_texts[0])} chars): {content_texts[0][:100]}...")
+                                    else:
+                                        message_summary["empty_messages"] += 1
+                                        self.logger.debug(f"   Message {i+1}: {msg_type} - EMPTY or no content detected")
+                                else:
+                                    message_summary["result_messages"] += 1
+                                    self.logger.debug(f"   Message {i+1}: {msg_type}")
+
+                            self.logger.debug(f"📊 MESSAGE BREAKDOWN: Text={message_summary['text_messages']}, Tool Calls={message_summary['tool_calls']}, Results={message_summary['result_messages']}, Empty={message_summary['empty_messages']}")
+
+                            # Log tool execution details
+                            if query_result['tool_executions']:
+                                self.logger.debug(f"🔧 TOOL EXECUTION ANALYSIS:")
+                                for j, tool_exec in enumerate(query_result['tool_executions']):
+                                    tool_name = tool_exec.get('name', 'unknown')
+                                    self.logger.debug(f"   Tool {j+1}: {tool_name} - Status: {tool_exec.get('status', 'unknown')}")
+
+                            # Log substantive response details
+                            self.logger.debug(f"💬 SUBSTANTIVE RESPONSES: {query_result['substantive_responses']} identified")
+
+                        # Info-level summary for all cases
+                        if len(query_result['messages_collected']) > 30:  # Warning for high message count
+                            self.logger.warning(f"⚠️ HIGH MESSAGE COUNT DETECTED: {agent_name} generated {len(query_result['messages_collected'])} messages (expected <30)")
+                            self.logger.warning(f"   This may indicate: redundant tool calls, excessive content, or potential agent looping")
+                            self.logger.warning(f"   Tool executions: {len(query_result['tool_executions'])}, Substantive responses: {query_result['substantive_responses']}")
+                        elif len(query_result['messages_collected']) > 20:  # Info for elevated count
+                            self.logger.info(f"ℹ️ ELEVATED MESSAGE COUNT: {agent_name} generated {len(query_result['messages_collected'])} messages")
+
                         break  # Natural completion point
 
             # Execute with timeout
@@ -2862,6 +2924,39 @@ class ResearchOrchestrator:
                 )
 
                 self.logger.info(f"✅ Research execution completed: {research_result['substantive_responses']} responses, {len(research_result['tool_executions'])} tools")
+
+                # Detailed research agent message logging for debugging
+                messages_collected = research_result.get('messages_collected', [])
+                if len(messages_collected) > 30:  # Warning for high message count
+                    self.logger.warning(f"⚠️ HIGH RESEARCH MESSAGE COUNT: Research agent generated {len(messages_collected)} messages (expected <30)")
+                    self.logger.warning(f"   This may indicate: excessive search queries, redundant scrapes, or agent inefficiency")
+
+                    # Detailed breakdown when message count is high
+                    if self.logger.isEnabledFor(logging.DEBUG):
+                        self.logger.debug(f"📝 DETAILED RESEARCH MESSAGE ANALYSIS:")
+                        search_queries = 0
+                        scrape_requests = 0
+                        content_analysis = 0
+
+                        for i, msg_info in enumerate(messages_collected):
+                            msg_type = msg_info.get("type", "unknown")
+                            tool_calls = msg_info.get("tool_calls", [])
+
+                            if tool_calls:
+                                for tool_call in tool_calls:
+                                    tool_name = tool_call.get('name', 'unknown')
+                                    if 'search' in tool_name.lower():
+                                        search_queries += 1
+                                    elif 'scrape' in tool_name.lower() or 'crawl' in tool_name.lower():
+                                        scrape_requests += 1
+                                    elif 'analyze' in tool_name.lower():
+                                        content_analysis += 1
+
+                        self.logger.debug(f"   Search Queries: {search_queries}, Scrape Requests: {scrape_requests}, Content Analysis: {content_analysis}")
+                        self.logger.debug(f"   Average messages per operation: {len(messages_collected) / max(1, search_queries + scrape_requests + content_analysis):.1f}")
+
+                elif len(messages_collected) > 20:  # Info for elevated count
+                    self.logger.info(f"ℹ️ ELEVATED RESEARCH MESSAGE COUNT: Research agent generated {len(messages_collected)} messages")
 
                 # ✅ Extract actual scrape count from this attempt
                 attempt_scrapes = self._extract_scrape_count(research_result)
@@ -3007,6 +3102,53 @@ class ResearchOrchestrator:
 
                 self.logger.info(f"✅ Report generation completed: {report_result['substantive_responses']} responses, {report_result['tool_executions']} tools")
 
+                # Detailed report agent message logging for debugging
+                messages_collected = report_result.get('messages_collected', [])
+                if len(messages_collected) > 30:  # Warning for high message count
+                    self.logger.warning(f"⚠️ HIGH REPORT MESSAGE COUNT: Report agent generated {len(messages_collected)} messages (expected <30)")
+                    self.logger.warning(f"   This may indicate: excessive revisions, redundant content generation, or agent looping")
+
+                    # Detailed breakdown when message count is high
+                    if self.logger.isEnabledFor(logging.DEBUG):
+                        self.logger.debug(f"📝 DETAILED REPORT MESSAGE ANALYSIS:")
+                        content_generation = 0
+                        tool_calls = 0
+                        revisions = 0
+                        total_chars = 0
+
+                        for i, msg_info in enumerate(messages_collected):
+                            msg_type = msg_info.get("type", "unknown")
+                            content_texts = msg_info.get("content_texts", [])
+                            msg_tools = msg_info.get("tool_calls", [])
+
+                            if content_texts:
+                                content_generation += 1
+                                for text in content_texts:
+                                    total_chars += len(text)
+
+                            if msg_tools:
+                                tool_calls += len(msg_tools)
+
+                            # Look for revision indicators
+                            if content_texts:
+                                for text in content_texts:
+                                    if any(word in text.lower() for word in ['revise', 'update', 'modify', 'improve', 'enhance']):
+                                        revisions += 1
+                                        break
+
+                        self.logger.debug(f"   Content generations: {content_generation}, Tool calls: {tool_calls}, Revision attempts: {revisions}")
+                        self.logger.debug(f"   Total characters generated: {total_chars:,}, Average per message: {total_chars / max(1, content_generation):.0f}")
+
+                        # Log specific tool execution patterns
+                        if report_result.get('tool_executions'):
+                            self.logger.debug(f"🔧 REPORT TOOL ANALYSIS:")
+                            for j, tool_exec in enumerate(report_result['tool_executions']):
+                                tool_name = tool_exec.get('name', 'unknown')
+                                self.logger.debug(f"   Tool {j+1}: {tool_name}")
+
+                elif len(messages_collected) > 20:  # Info for elevated count
+                    self.logger.info(f"ℹ️ ELEVATED REPORT MESSAGE COUNT: Report agent generated {len(messages_collected)} messages")
+
                 # Validate report completion
                 if self._validate_report_completion(report_result):
                     report_successful = True
@@ -3077,9 +3219,9 @@ class ResearchOrchestrator:
                 self.logger.info(f"Session {session_id}: Editorial review attempt {attempt + 1}/{max_attempts}")
 
                 # Use LLM judge to determine editing approach based on original query
-                editorial_config = await self._determine_report_scope_with_llm_judge(session_data['topic'])
+                llm_editorial_config = await self._determine_report_scope_with_llm_judge(session_data['topic'])
 
-                self.logger.info(f"Editorial LLM Judge determined rigor: {editorial_config['editing_rigor']} (confidence: {editorial_config['llm_confidence']})")
+                self.logger.info(f"Editorial LLM Judge determined rigor: {llm_editorial_config['editing_rigor']} (confidence: {llm_editorial_config['llm_confidence']})")
 
                 # Initialize editorial search tracking
                 session_data["editorial_search_stats"] = {
@@ -3094,6 +3236,13 @@ class ResearchOrchestrator:
                 editorial_config = session_data.get("editorial_research_config", {})
                 queries_used = editorial_config.get("current_queries", 0)
                 queries_remaining = editorial_config.get("max_search_queries", 2) - queries_used
+
+                # Merge LLM editorial config (with editing_rigor) into editorial config
+                editorial_config.update({
+                    "editing_rigor": llm_editorial_config.get("editing_rigor", "standard"),
+                    "llm_reasoning": llm_editorial_config.get("llm_reasoning", ""),
+                    "llm_confidence": llm_editorial_config.get("llm_confidence", "medium")
+                })
 
                 review_prompt = f"""
                 Use the editor_agent agent to review the generated report for quality, accuracy, and completeness.
@@ -4429,6 +4578,10 @@ This session had limited research output available. The editorial agent has proc
         work_products["tracking"][work_product_number]["completed_at"] = datetime.now().isoformat()
         work_products["tracking"][work_product_number]["result"] = result or {}
 
+        # CRITICAL: Validate work product type matches expected content
+        stage_name = work_products["tracking"][work_product_number]["stage"]
+        self._validate_work_product_type(session_id, work_product_number, stage_name, result)
+
         # Track actual file location if provided in result
         if result and "file_path" in result:
             work_products["tracking"][work_product_number]["actual_file_path"] = result["file_path"]
@@ -4455,6 +4608,68 @@ This session had limited research output available. The editorial agent has proc
                                     work_product_number=work_product_number,
                                     stage=work_products['tracking'][work_product_number]['stage'],
                                     result_summary=str(result)[:100] if result else "No result")
+
+    def _validate_work_product_type(self, session_id: str, work_product_number: int, stage_name: str, result: dict = None):
+        """Validate that work product type matches expected content and log violations."""
+
+        # Define expected work product types
+        expected_types = {
+            1: ["research"],
+            2: ["report_generation", "report"],
+            3: ["editorial_review", "editorial"],
+            4: ["final_summary", "final"]
+        }
+
+        # Get expected types for this work product number
+        expected = expected_types.get(work_product_number, [])
+        if not expected:
+            return  # No validation for other work product numbers
+
+        # Check if stage matches expected type
+        if stage_name not in expected:
+            self.logger.error(f"🚨 CRITICAL WORK PRODUCT VIOLATION: Work Product {work_product_number}")
+            self.logger.error(f"   Expected stage type: {expected}")
+            self.logger.error(f"   Actual stage type: {stage_name}")
+            self.logger.error(f"   Session ID: {session_id}")
+
+            # Special handling for editorial agent creating wrong type
+            if work_product_number == 4 and stage_name in ["editorial_review", "editorial"]:
+                self.logger.error(f"🚨 EDITORIAL AGENT ROLE VIOLATION: Editorial agent created Work Product 4 instead of Work Product 3")
+                self.logger.error(f"   This indicates the editorial agent abandoned its critical assessment role")
+                self.logger.error(f"   The editorial agent should create editorial reviews (Work Product 3), not final summaries (Work Product 4)")
+                self.logger.error(f"   This is a critical system failure that bypasses quality control")
+
+            elif work_product_number == 3 and stage_name in ["final_summary", "final"]:
+                self.logger.error(f"🚨 WORKFLOW INVERSION: Final summary created as Work Product 3")
+                self.logger.error(f"   Final summaries should only be Work Product 4")
+                self.logger.error(f"   Work Product 3 should be editorial reviews")
+
+        # Validate file content if file path is provided
+        if result and "file_path" in result:
+            file_path = Path(result["file_path"])
+
+            # Check if file exists
+            if file_path.exists():
+                # Read first few lines to check content type
+                try:
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        first_lines = [f.readline().strip() for _ in range(5)]
+
+                    content_preview = " ".join([line for line in first_lines if line])
+
+                    # Check for content-type mismatches
+                    if work_product_number == 3 and stage_name in ["final_summary", "final"]:
+                        if "session summary" in content_preview.lower() or "process overview" in content_preview.lower():
+                            self.logger.error(f"🚨 CONTENT MISMATCH: Work Product 3 contains final summary content")
+                            self.logger.error(f"   File: {file_path}")
+                            self.logger.error(f"   Content preview: {content_preview[:200]}...")
+
+                    elif work_product_number == 4 and stage_name in ["editorial_review", "editorial"]:
+                        if "editorial assessment" in content_preview.lower() or "quality review" in content_preview.lower():
+                            self.logger.info(f"ℹ️ Editorial content found in Work Product 4 - possible workflow inversion")
+
+                except Exception as e:
+                    self.logger.warning(f"Could not validate work product content: {e}")
 
     def get_work_product_summary(self, session_id: str) -> dict:
         """Get a summary of all work products for a session."""
@@ -4517,7 +4732,7 @@ This session had limited research output available. The editorial agent has proc
             elif wp_num == 1.5:  # 1B work product
                 expected_path = session_path / "research" / "1B-search_workproduct_*.md"
             elif wp_num == 2:
-                expected_path = session_path / "working" / "2-*-report.md"
+                expected_path = session_path / "working" / "2-*.md"
             elif wp_num == 3:
                 expected_path = session_path / "working" / "3-*-review.md"
             elif wp_num == 4:
